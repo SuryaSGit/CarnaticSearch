@@ -146,7 +146,15 @@ def _char_ngrams(text: str, n: int) -> set:
     return {text[i:i + n] for i in range(len(text) - n + 1)}
 
 
-def extract_features(query: str, candidate: dict) -> list:
+def extract_features(query: str, candidate: dict, qs_counts: dict = None) -> list:
+    """
+    qs_counts is the dict returned by _load_query_song_counts(): how many
+    times each song was confirmed correct for each (normalized) query in
+    the feedback log. The picked_for_this_query feature gives the model
+    per-(query, song) memory that the other generic features lack — so
+    confirming a pick once meaningfully boosts that song the next time the
+    same query is run.
+    """
     norm_q = normalize(query)
     norm_lyrics = normalize(candidate["lyrics"])
     norm_title = normalize(candidate["song"])
@@ -162,6 +170,10 @@ def extract_features(query: str, candidate: dict) -> list:
     q4 = _char_ngrams(norm_q, 4)
     l4 = _char_ngrams(norm_lyrics, 4)
 
+    pick_count = 0
+    if qs_counts is not None:
+        pick_count = qs_counts.get(norm_q, {}).get(candidate["song"], 0)
+
     return [
         candidate.get("score", 0.0),                             # BM25 score
         len(q_words & l_words) / (len(q_words) + 1),            # word overlap: lyrics
@@ -172,13 +184,16 @@ def extract_features(query: str, candidate: dict) -> list:
         len(q3 & t3) / (len(q3) + 1),                           # trigram overlap: title
         len(q4 & l4) / (len(q4) + 1),                           # quadgram overlap: lyrics
         len(candidate["lyrics"]),                                 # lyrics length
+        pick_count,                                               # picks for this exact query
     ]
 
 
 # -----------------------
 # ML Ranker: Load / Save / Train
 # -----------------------
-RANKER_PATH = "ranker_v2.pkl"
+# Resolved relative to this file so cwd doesn't matter (CLI vs API both work).
+RANKER_PATH   = os.path.join(os.path.dirname(__file__), 'ranker_v3.pkl')
+FEEDBACK_PATH = os.path.join(os.path.dirname(__file__), '..', 'feedback_log.jsonl')
 
 
 def load_ranker():
@@ -193,13 +208,36 @@ def save_ranker(ranker):
         pickle.dump(ranker, f)
 
 
+def _load_query_song_counts() -> dict:
+    """Read feedback log, return {normalized_query: {song_name: pick_count}}."""
+    counts = {}
+    if not os.path.exists(FEEDBACK_PATH):
+        return counts
+    with open(FEEDBACK_PATH) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            q = normalize(entry.get("query", ""))
+            song = entry.get("correct_song", "")
+            if not q or not song:
+                continue
+            counts.setdefault(q, {})
+            counts[q][song] = counts[q].get(song, 0) + 1
+    return counts
+
+
 def retrain(min_samples: int = 50):
-    if not os.path.exists("feedback_log.jsonl"):
+    if not os.path.exists(FEEDBACK_PATH):
         print("No feedback log found.")
         return None
 
     training_data = []
-    with open("feedback_log.jsonl", "r") as f:
+    with open(FEEDBACK_PATH, "r") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -211,9 +249,11 @@ def retrain(min_samples: int = 50):
         print(f"Only {len(usable)} usable samples — need {min_samples} to train. Keep collecting!")
         return None
 
+    qs_counts = _load_query_song_counts()
+
     X, y, groups = [], [], []
     for entry in usable:
-        features = [extract_features(entry["query"], c) for c in entry["candidates"]]
+        features = [extract_features(entry["query"], c, qs_counts) for c in entry["candidates"]]
         X.extend(features)
         y.extend(entry["labels"])
         groups.append(len(entry["candidates"]))
@@ -236,7 +276,8 @@ def ml_rank(query: str, candidates: list) -> tuple:
     if ranker is None:
         return candidates[0], candidates
 
-    features = np.array([extract_features(query, c) for c in candidates])
+    qs_counts = _load_query_song_counts()
+    features = np.array([extract_features(query, c, qs_counts) for c in candidates])
     scores = ranker.predict(features)
     order = np.argsort(scores)[::-1]
     ranked = [candidates[i] for i in order]
@@ -296,7 +337,7 @@ def interactive_session():
             "ml_correct": best["song"].lower() == correct.lower(),
         }
 
-        with open("feedback_log.jsonl", "a") as f:
+        with open(FEEDBACK_PATH, "a") as f:
             f.write(json.dumps(entry) + "\n")
 
         if entry["ml_correct"]:
@@ -311,11 +352,11 @@ def interactive_session():
 
 
 def _print_stats():
-    if not os.path.exists("feedback_log.jsonl"):
+    if not os.path.exists(FEEDBACK_PATH):
         return
 
     total = ml_correct = in_shortlist = 0
-    with open("feedback_log.jsonl", "r") as f:
+    with open(FEEDBACK_PATH, "r") as f:
         for line in f:
             line = line.strip()
             if not line:
