@@ -10,8 +10,8 @@ const els = {
   topPick:        $("#top-pick"),
   shortlist:      $("#shortlist"),
   feedbackSec:    $("#feedback-section"),
-  feedbackForm:   $("#feedback-form"),
   correctSong:    $("#correct-song"),
+  typeaheadList:  $("#typeahead-results"),
   feedbackStatus: $("#feedback-status"),
   notInList:      $("#not-in-list"),
   stats:          $("#stats"),
@@ -60,6 +60,8 @@ function renderResults({ top_pick, shortlist }) {
   els.results.classList.remove("hidden");
   els.feedbackSec.classList.remove("hidden");
   els.notInList.open = false;
+  els.correctSong.value = "";
+  els.typeaheadList.classList.add("hidden");
 
   // Top pick
   els.topPick.innerHTML = `
@@ -101,17 +103,83 @@ function selectAnswer(songName, clickedEl) {
 }
 
 
-els.feedbackForm.addEventListener("submit", (e) => {
-  e.preventDefault();
-  if (feedbackLocked) return;
-  const correct = els.correctSong.value.trim();
-  if (!correct) return;
-  feedbackLocked = true;
-  document.querySelectorAll("#shortlist li, #top-pick").forEach((el) =>
-    el.classList.add("disabled"),
-  );
-  submitFeedback(correct);
+// -----------------------
+// Typeahead lookup against /songs
+// -----------------------
+let typeaheadTimer = null;
+let typeaheadController = null;
+
+els.correctSong.addEventListener("input", () => {
+  const q = els.correctSong.value.trim();
+  clearTimeout(typeaheadTimer);
+  if (!q) {
+    els.typeaheadList.classList.add("hidden");
+    return;
+  }
+  typeaheadTimer = setTimeout(() => fetchTypeahead(q), 150);
 });
+
+els.correctSong.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    els.typeaheadList.classList.add("hidden");
+  }
+});
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".typeahead")) {
+    els.typeaheadList.classList.add("hidden");
+  }
+});
+
+
+async function fetchTypeahead(q) {
+  if (typeaheadController) typeaheadController.abort();
+  typeaheadController = new AbortController();
+  try {
+    const r = await fetch(
+      `${API}/songs?q=${encodeURIComponent(q)}&limit=10`,
+      { signal: typeaheadController.signal },
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const matches = await r.json();
+    renderTypeahead(matches);
+  } catch (err) {
+    if (err.name === "AbortError") return;
+    els.typeaheadList.innerHTML = `<li class="empty">Lookup failed</li>`;
+    els.typeaheadList.classList.remove("hidden");
+  }
+}
+
+
+function renderTypeahead(matches) {
+  if (matches.length === 0) {
+    els.typeaheadList.innerHTML = `<li class="empty">No matches</li>`;
+  } else {
+    els.typeaheadList.innerHTML = matches
+      .map(
+        (m) => `
+          <li data-song="${escapeHtml(m.song)}">
+            <div class="song-name">${escapeHtml(m.song)}</div>
+            <div class="composer">${escapeHtml(m.composer)}</div>
+          </li>`,
+      )
+      .join("");
+    els.typeaheadList.querySelectorAll("li[data-song]").forEach((li) => {
+      li.addEventListener("click", () => {
+        const song = li.getAttribute("data-song");
+        els.correctSong.value = song;
+        els.typeaheadList.classList.add("hidden");
+        if (feedbackLocked) return;
+        feedbackLocked = true;
+        document.querySelectorAll("#shortlist li, #top-pick").forEach((el) =>
+          el.classList.add("disabled"),
+        );
+        submitFeedback(song);
+      });
+    });
+  }
+  els.typeaheadList.classList.remove("hidden");
+}
 
 
 async function submitFeedback(correctSong) {

@@ -34,11 +34,16 @@
 
       <div id="feedback-section" class="hidden">
         <details id="not-in-list">
-          <summary>Correct song not shown? Type it</summary>
-          <form id="feedback-form">
-            <input id="correct-song" type="text" placeholder="Exact song name" />
-            <button type="submit">Submit</button>
-          </form>
+          <summary>Correct song not shown? Search the database</summary>
+          <div class="typeahead">
+            <input
+              id="correct-song"
+              type="text"
+              placeholder="Type a song name or composer…"
+              autocomplete="off"
+            />
+            <ul id="typeahead-results" class="hidden"></ul>
+          </div>
         </details>
         <p id="feedback-status"></p>
       </div>

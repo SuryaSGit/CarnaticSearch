@@ -220,11 +220,69 @@ h2 {
 
 #not-in-list summary:hover { color: var(--accent); }
 
-#feedback-form {
+.typeahead {
+  position: relative;
   margin-top: 10px;
-  display: flex;
-  gap: 8px;
 }
+
+.typeahead input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+}
+
+.typeahead input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+#typeahead-results {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+#typeahead-results li {
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+#typeahead-results li:last-child { border-bottom: none; }
+
+#typeahead-results li:hover,
+#typeahead-results li.active {
+  background: var(--accent-light);
+}
+
+#typeahead-results .song-name {
+  font-weight: 500;
+  font-size: 0.95rem;
+}
+
+#typeahead-results .composer {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 2px;
+}
+
+#typeahead-results .empty {
+  color: var(--muted);
+  font-style: italic;
+  cursor: default;
+}
+
+#typeahead-results .empty:hover { background: var(--card); }
 
 #correct-song {
   flex: 1;

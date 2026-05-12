@@ -31,6 +31,18 @@ import bm_ml_v2 as searcher  # noqa: E402
 FEEDBACK_LOG = os.path.join(ROOT, 'feedback_log.jsonl')
 FRONTEND_DIR = os.path.join(ROOT, 'frontend')
 
+# Precompute unique (song, composer) list once at startup. searcher.metadata
+# has ~70k entries because the corpus is chunked; we dedupe to ~thousands.
+_UNIQUE_SONGS = []
+_seen = set()
+for _rec in searcher.metadata:
+    _key = (_rec.get("Song Name", ""), _rec.get("Composer", ""))
+    if _key in _seen:
+        continue
+    _seen.add(_key)
+    _UNIQUE_SONGS.append({"song": _key[0], "composer": _key[1]})
+del _seen
+
 app = FastAPI(title="CarnaticSearch API", version="0.1.0")
 
 app.add_middleware(
@@ -109,6 +121,21 @@ def feedback(req: FeedbackRequest):
 def retrain():
     ranker = searcher.retrain(min_samples=1)
     return {"trained": ranker is not None}
+
+
+@app.get("/songs")
+def songs(q: str = "", limit: int = 10):
+    """Substring lookup over song name + composer for the typeahead picker."""
+    q_lower = q.strip().lower()
+    if not q_lower:
+        return []
+    results = []
+    for rec in _UNIQUE_SONGS:
+        if q_lower in rec["song"].lower() or q_lower in rec["composer"].lower():
+            results.append(rec)
+            if len(results) >= limit:
+                break
+    return results
 
 
 @app.get("/stats")
