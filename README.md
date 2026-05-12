@@ -28,12 +28,12 @@ llm_searcher/
   bm_test_llm.py         # Earlier experiment with Gemini reranking
 
 backend/
-  app.py                 # FastAPI: /search, /feedback, /retrain, /stats
+  app.py                 # FastAPI: /search, /feedback, /retrain, /stats, /songs
   requirements.txt
 
 frontend/
   index.html             # Search UI (served by FastAPI)
-  app.js                 # Search + feedback + retrain logic
+  app.js                 # Search, click-to-select feedback, typeahead, retrain
   style.css
 
 tests/
@@ -54,14 +54,17 @@ scraping_tools/
 
 ```bash
 pip install -r backend/requirements.txt
-uvicorn backend.app:app --reload --port 8000
+python -m uvicorn backend.app:app --reload --port 8000
 # open http://127.0.0.1:8000
 ```
 
+`python -m uvicorn` is preferred over a bare `uvicorn` command — it guarantees the active virtualenv's interpreter is used, avoiding `ModuleNotFoundError` from a globally-installed uvicorn picking up the wrong Python.
+
 The FastAPI server serves both the API and the static frontend on the same port. The UI provides:
-- Search box → top pick (highlighted) + shortlist of 5
-- Feedback form → confirm the pick or supply the correct song
-- Live stats and a Retrain button
+- **Search box** → top pick (highlighted) + shortlist of 5
+- **Click-to-select feedback** — click the top pick or any shortlist item to mark it as correct. Each click logs ground truth and triggers a background retrain so the next search uses the updated model
+- **Database typeahead** for the rare case the correct song isn't in the shortlist — search by song name or composer, click a result to log it
+- **Live stats** (queries logged, ML accuracy, shortlist recall) and a manual Retrain button
 
 ### CLI (interactive)
 
@@ -78,11 +81,12 @@ Commands at the prompt:
 
 ### API endpoints
 
-| Method | Path | Body | Returns |
+| Method | Path | Params / Body | Returns |
 |---|---|---|---|
 | POST | `/search` | `{query, shortlist_size}` | `{top_pick, shortlist}` |
 | POST | `/feedback` | `{query, correct_song, shortlist, ml_pick}` | `{ok, ml_correct, correct_in_shortlist}` |
 | POST | `/retrain` | — | `{trained: bool}` |
+| GET  | `/songs` | `?q=...&limit=10` | `[{song, composer}, ...]` substring lookup over the corpus |
 | GET  | `/stats` | — | `{total, ml_correct, in_shortlist, ml_accuracy_pct, shortlist_recall_pct}` |
 
 ### Run the test suite
