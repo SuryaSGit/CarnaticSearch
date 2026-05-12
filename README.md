@@ -23,17 +23,26 @@ Before indexing or querying, text goes through:
 song_data/
   data.json              # Corpus: song name, composer, lyrics
 
-lexical_searcher/
-  search_bm.py           # Baseline BM25 (no normalization)
-
 llm_searcher/
-  bm_ml_v2.py            # Current pipeline: BM25 + LGBMRanker
+  bm_ml_v2.py            # Search pipeline: BM25 + LGBMRanker
   bm_test_llm.py         # Earlier experiment with Gemini reranking
 
+backend/
+  app.py                 # FastAPI: /search, /feedback, /retrain, /stats
+  requirements.txt
+
+frontend/
+  index.html             # Search UI (served by FastAPI)
+  app.js                 # Search + feedback + retrain logic
+  style.css
+
 tests/
-  test_cases.json        # 20 query → correct_song test cases
-  run_tests.py           # Benchmark script
+  test_cases.json        # Query → correct_song test cases
+  run_tests.py           # Benchmark vs DuckDuckGo top-5
   web_cache.json         # Cached DuckDuckGo results (auto-managed)
+
+lexical_searcher/
+  search_bm.py           # Baseline BM25 (no normalization)
 
 scraping_tools/
   scrape_test.py         # Tools used to build the corpus
@@ -41,7 +50,20 @@ scraping_tools/
 
 ## Usage
 
-### Interactive search
+### Web app (recommended)
+
+```bash
+pip install -r backend/requirements.txt
+uvicorn backend.app:app --reload --port 8000
+# open http://127.0.0.1:8000
+```
+
+The FastAPI server serves both the API and the static frontend on the same port. The UI provides:
+- Search box → top pick (highlighted) + shortlist of 5
+- Feedback form → confirm the pick or supply the correct song
+- Live stats and a Retrain button
+
+### CLI (interactive)
 
 ```bash
 cd llm_searcher
@@ -51,8 +73,17 @@ python bm_ml_v2.py
 Commands at the prompt:
 - Type a lyric snippet → get top pick + shortlist of 5
 - Press Enter to confirm the top pick is correct, or type the correct song name
-- `retrain` — retrain the LGBMRanker from collected feedback (needs ≥50 samples)
+- `retrain` — retrain the LGBMRanker from collected feedback
 - `quit` — exit
+
+### API endpoints
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| POST | `/search` | `{query, shortlist_size}` | `{top_pick, shortlist}` |
+| POST | `/feedback` | `{query, correct_song, shortlist, ml_pick}` | `{ok, ml_correct, correct_in_shortlist}` |
+| POST | `/retrain` | — | `{trained: bool}` |
+| GET  | `/stats` | — | `{total, ml_correct, in_shortlist, ml_accuracy_pct, shortlist_recall_pct}` |
 
 ### Run the test suite
 
@@ -80,14 +111,13 @@ Append to `tests/test_cases.json`:
 
 ## Dependencies
 
-```
-rank_bm25
-lightgbm
-numpy
-ddgs           # for web search column in tests
-```
-
-Install:
+Backend / search engine:
 ```bash
-pip install rank_bm25 lightgbm numpy ddgs
+pip install -r backend/requirements.txt
+```
+(installs fastapi, uvicorn, rank_bm25, lightgbm, scikit-learn, numpy, pydantic)
+
+For the test runner's DuckDuckGo comparison column:
+```bash
+pip install ddgs
 ```
