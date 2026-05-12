@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CarnaticSearch</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>CarnaticSearch</h1>
+      <p class="subtitle">Find a kriti by lyric snippet — typos and transliteration variants welcome.</p>
+    </header>
+
+    <section class="search-box">
+      <form id="search-form">
+        <input
+          id="query"
+          type="text"
+          placeholder="e.g. ninne nammithi naiyya sri rama"
+          autocomplete="off"
+          autofocus
+        />
+        <button type="submit" id="search-btn">Search</button>
+      </form>
+    </section>
+
+    <section id="results" class="hidden">
+      <div id="top-pick"></div>
+      <h2>Shortlist</h2>
+      <ol id="shortlist"></ol>
+
+      <div id="feedback-section" class="hidden">
+        <h3>Was the top pick correct?</h3>
+        <div class="feedback-buttons">
+          <button id="feedback-yes">Yes, top pick is right</button>
+          <button id="feedback-other">No — pick from shortlist</button>
+        </div>
+        <form id="feedback-form" class="hidden">
+          <input id="correct-song" type="text" placeholder="Type the correct song name" />
+          <button type="submit">Submit feedback</button>
+        </form>
+        <p id="feedback-status"></p>
+      </div>
+    </section>
+
+    <section id="stats-section">
+      <h3>Live stats</h3>
+      <div id="stats"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
