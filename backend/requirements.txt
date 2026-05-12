@@ -3,4 +3,5 @@ uvicorn[standard]
 pydantic
 rank_bm25
 lightgbm
+scikit-learn
 numpy

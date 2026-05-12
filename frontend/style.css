@@ -225,11 +225,37 @@ h2 {
 }
 
 #stats-section h3 {
-  margin: 0 0 12px;
+  margin: 0;
   font-size: 0.95rem;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.stats-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.ghost-btn {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 6px 12px;
+  font-size: 0.85rem;
+}
+
+.ghost-btn:hover {
+  background: var(--accent-light);
+}
+
+#retrain-status {
+  margin-top: 10px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-height: 1em;
 }
 
 #stats {

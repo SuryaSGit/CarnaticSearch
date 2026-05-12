@@ -16,6 +16,8 @@ const els = {
   correctSong:    $("#correct-song"),
   feedbackStatus: $("#feedback-status"),
   stats:          $("#stats"),
+  retrainBtn:     $("#retrain-btn"),
+  retrainStatus:  $("#retrain-status"),
 };
 
 let lastResult = null;  // { query, top_pick, shortlist }
@@ -158,6 +160,31 @@ async function loadStats() {
 }
 
 loadStats();
+
+
+// -----------------------
+// Retrain
+// -----------------------
+els.retrainBtn.addEventListener("click", async () => {
+  els.retrainBtn.disabled = true;
+  const originalText = els.retrainBtn.textContent;
+  els.retrainBtn.textContent = "Retraining…";
+  els.retrainStatus.textContent = "";
+
+  try {
+    const r = await fetch(`${API}/retrain`, { method: "POST" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    els.retrainStatus.textContent = data.trained
+      ? "Model retrained successfully — new picks will use the updated ranker."
+      : "Not enough usable feedback yet to retrain.";
+  } catch (err) {
+    els.retrainStatus.textContent = `Retrain failed: ${err.message}`;
+  } finally {
+    els.retrainBtn.disabled = false;
+    els.retrainBtn.textContent = originalText;
+  }
+});
 
 
 // -----------------------
