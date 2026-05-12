@@ -78,6 +78,12 @@ button:disabled { opacity: 0.5; cursor: wait; }
 
 .hidden { display: none !important; }
 
+.hint {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+
 #top-pick {
   background: var(--card);
   border: 2px solid var(--accent);
@@ -85,6 +91,17 @@ button:disabled { opacity: 0.5; cursor: wait; }
   padding: 20px;
   margin-bottom: 24px;
   box-shadow: 0 2px 8px rgba(154, 77, 42, 0.08);
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.15s;
+}
+
+#top-pick:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(154, 77, 42, 0.18);
+}
+
+#top-pick.selected {
+  background: var(--accent-light);
 }
 
 #top-pick .label {
@@ -139,6 +156,30 @@ h2 {
   padding: 12px 16px 12px 44px;
   margin-bottom: 8px;
   position: relative;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+
+#shortlist li:hover {
+  border-color: var(--accent);
+  background: #fffaf6;
+  transform: translateX(2px);
+}
+
+#shortlist li.selected {
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+#shortlist li.disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+#shortlist li.disabled:hover {
+  border-color: var(--border);
+  background: var(--card);
+  transform: none;
 }
 
 #shortlist li::before {
@@ -165,37 +206,22 @@ h2 {
 
 /* Feedback */
 #feedback-section {
-  margin-top: 32px;
-  padding-top: 20px;
+  margin-top: 24px;
+  padding-top: 16px;
   border-top: 1px solid var(--border);
 }
 
-#feedback-section h3 {
-  margin: 0 0 12px;
-  font-size: 1rem;
-}
-
-.feedback-buttons {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.feedback-buttons button {
-  background: var(--card);
-  color: var(--text);
-  border: 1px solid var(--border);
+#not-in-list summary {
+  cursor: pointer;
+  color: var(--muted);
   font-size: 0.9rem;
-  padding: 8px 14px;
+  padding: 4px 0;
 }
 
-.feedback-buttons button:hover {
-  border-color: var(--accent);
-  background: var(--accent-light);
-}
+#not-in-list summary:hover { color: var(--accent); }
 
 #feedback-form {
-  margin-top: 12px;
+  margin-top: 10px;
   display: flex;
   gap: 8px;
 }

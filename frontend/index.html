@@ -27,20 +27,19 @@
     </section>
 
     <section id="results" class="hidden">
+      <p class="hint">Click the song that's actually correct — your pick trains the model.</p>
       <div id="top-pick"></div>
       <h2>Shortlist</h2>
       <ol id="shortlist"></ol>
 
       <div id="feedback-section" class="hidden">
-        <h3>Was the top pick correct?</h3>
-        <div class="feedback-buttons">
-          <button id="feedback-yes">Yes, top pick is right</button>
-          <button id="feedback-other">No — pick from shortlist</button>
-        </div>
-        <form id="feedback-form" class="hidden">
-          <input id="correct-song" type="text" placeholder="Type the correct song name" />
-          <button type="submit">Submit feedback</button>
-        </form>
+        <details id="not-in-list">
+          <summary>Correct song not shown? Type it</summary>
+          <form id="feedback-form">
+            <input id="correct-song" type="text" placeholder="Exact song name" />
+            <button type="submit">Submit</button>
+          </form>
+        </details>
         <p id="feedback-status"></p>
       </div>
     </section>

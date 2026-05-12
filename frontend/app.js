@@ -10,17 +10,17 @@ const els = {
   topPick:        $("#top-pick"),
   shortlist:      $("#shortlist"),
   feedbackSec:    $("#feedback-section"),
-  feedbackYes:    $("#feedback-yes"),
-  feedbackOther:  $("#feedback-other"),
   feedbackForm:   $("#feedback-form"),
   correctSong:    $("#correct-song"),
   feedbackStatus: $("#feedback-status"),
+  notInList:      $("#not-in-list"),
   stats:          $("#stats"),
   retrainBtn:     $("#retrain-btn"),
   retrainStatus:  $("#retrain-status"),
 };
 
-let lastResult = null;  // { query, top_pick, shortlist }
+let lastResult       = null;   // { query, top_pick, shortlist }
+let feedbackLocked   = false;  // prevent double-submission per result
 
 
 // -----------------------
@@ -35,6 +35,7 @@ els.form.addEventListener("submit", async (e) => {
   els.searchBtn.textContent = "Searching…";
   els.feedbackStatus.textContent = "";
   els.feedbackStatus.classList.remove("error");
+  feedbackLocked = false;
 
   try {
     const r = await fetch(`${API}/search`, {
@@ -58,49 +59,66 @@ els.form.addEventListener("submit", async (e) => {
 function renderResults({ top_pick, shortlist }) {
   els.results.classList.remove("hidden");
   els.feedbackSec.classList.remove("hidden");
-  els.feedbackForm.classList.add("hidden");
+  els.notInList.open = false;
 
+  // Top pick
   els.topPick.innerHTML = `
-    <div class="label">Top pick</div>
+    <div class="label">Top pick — click if correct</div>
     <h2 class="song-name">${escapeHtml(top_pick.song)}</h2>
     <p class="composer">${escapeHtml(top_pick.composer)}</p>
     <p class="lyrics-preview">${escapeHtml(truncate(top_pick.lyrics, 240))}</p>
   `;
+  els.topPick.onclick = () => selectAnswer(top_pick.song, els.topPick);
 
-  els.shortlist.innerHTML = shortlist
-    .map(
-      (s) => `
-        <li>
-          <div class="song-name">${escapeHtml(s.song)}</div>
-          <div class="composer">${escapeHtml(s.composer)}</div>
-        </li>`,
-    )
-    .join("");
+  // Shortlist
+  els.shortlist.innerHTML = "";
+  shortlist.forEach((s) => {
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <div class="song-name">${escapeHtml(s.song)}</div>
+      <div class="composer">${escapeHtml(s.composer)}</div>
+    `;
+    li.onclick = () => selectAnswer(s.song, li);
+    els.shortlist.appendChild(li);
+  });
 }
 
 
 // -----------------------
-// Feedback
+// Feedback (click on top pick or shortlist item)
 // -----------------------
-els.feedbackYes.addEventListener("click", () => {
-  if (!lastResult) return;
-  submitFeedback(lastResult.top_pick.song);
-});
+function selectAnswer(songName, clickedEl) {
+  if (feedbackLocked) return;
+  feedbackLocked = true;
 
-els.feedbackOther.addEventListener("click", () => {
-  els.feedbackForm.classList.toggle("hidden");
-  els.correctSong.focus();
-});
+  // Visual feedback
+  clickedEl.classList.add("selected");
+  document.querySelectorAll("#shortlist li, #top-pick").forEach((el) => {
+    if (el !== clickedEl) el.classList.add("disabled");
+  });
+
+  submitFeedback(songName);
+}
+
 
 els.feedbackForm.addEventListener("submit", (e) => {
   e.preventDefault();
+  if (feedbackLocked) return;
   const correct = els.correctSong.value.trim();
   if (!correct) return;
+  feedbackLocked = true;
+  document.querySelectorAll("#shortlist li, #top-pick").forEach((el) =>
+    el.classList.add("disabled"),
+  );
   submitFeedback(correct);
 });
 
+
 async function submitFeedback(correctSong) {
   if (!lastResult) return;
+  els.feedbackStatus.textContent = "Saving…";
+  els.feedbackStatus.classList.remove("error");
+
   try {
     const r = await fetch(`${API}/feedback`, {
       method: "POST",
@@ -114,20 +132,46 @@ async function submitFeedback(correctSong) {
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
+
+    let msg;
     if (data.ml_correct) {
-      els.feedbackStatus.textContent = "Saved — ML got it right.";
+      msg = "Logged — ML got it right.";
     } else if (data.correct_in_shortlist) {
-      els.feedbackStatus.textContent = "Saved — useful training signal (correct was in shortlist but not the top pick).";
+      msg = "Logged — correct was in shortlist but not top.";
     } else {
-      els.feedbackStatus.textContent = "Saved — correct song wasn't in the shortlist.";
+      msg = "Logged — correct wasn't in shortlist.";
     }
-    els.feedbackStatus.classList.remove("error");
-    els.feedbackForm.classList.add("hidden");
+
+    els.feedbackStatus.textContent = msg + " Updating model…";
     els.correctSong.value = "";
+    els.notInList.open = false;
     loadStats();
+
+    // Auto-retrain in the background — each click moves the model
+    autoRetrain();
   } catch (err) {
     els.feedbackStatus.textContent = `Feedback failed: ${err.message}`;
     els.feedbackStatus.classList.add("error");
+    feedbackLocked = false;  // allow retry
+    document.querySelectorAll("#shortlist li, #top-pick").forEach((el) =>
+      el.classList.remove("disabled", "selected"),
+    );
+  }
+}
+
+
+async function autoRetrain() {
+  try {
+    const r = await fetch(`${API}/retrain`, { method: "POST" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const baseMsg = els.feedbackStatus.textContent.replace(/ Updating model…$/, "");
+    els.feedbackStatus.textContent = data.trained
+      ? baseMsg + " Model updated."
+      : baseMsg + " Need more samples to retrain.";
+    loadStats();
+  } catch (err) {
+    els.feedbackStatus.textContent += ` (retrain failed: ${err.message})`;
   }
 }
 
@@ -163,11 +207,11 @@ loadStats();
 
 
 // -----------------------
-// Retrain
+// Manual retrain button (still available for full re-train)
 // -----------------------
 els.retrainBtn.addEventListener("click", async () => {
   els.retrainBtn.disabled = true;
-  const originalText = els.retrainBtn.textContent;
+  const original = els.retrainBtn.textContent;
   els.retrainBtn.textContent = "Retraining…";
   els.retrainStatus.textContent = "";
 
@@ -176,13 +220,13 @@ els.retrainBtn.addEventListener("click", async () => {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     els.retrainStatus.textContent = data.trained
-      ? "Model retrained successfully — new picks will use the updated ranker."
+      ? "Model retrained successfully."
       : "Not enough usable feedback yet to retrain.";
   } catch (err) {
     els.retrainStatus.textContent = `Retrain failed: ${err.message}`;
   } finally {
     els.retrainBtn.disabled = false;
-    els.retrainBtn.textContent = originalText;
+    els.retrainBtn.textContent = original;
   }
 });
 
