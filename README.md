@@ -6,8 +6,8 @@ A search engine for Carnatic music kritis. Given a lyric snippet or song name (i
 
 The pipeline runs in two stages:
 
-1. **BM25 retrieval** — lyrics are normalized and tokenized into word tokens, character n-grams (3–4 chars), and word bigrams. This lets the index fuzzy-match phonetic variants even when transliteration is inconsistent (e.g. `naiyya` vs `nayya`, `bhajana` vs `bajana`).
-2. **LGBMRanker reranking** — a LightGBM learning-to-rank model re-scores the top 20 BM25 candidates using features like token overlap, character n-gram overlap, and exact phrase match. It is trained from user feedback collected during interactive sessions.
+1. **BM25 retrieval** — lyrics are normalized and tokenized into word tokens, character n-grams (3–4 chars), and word bigrams (both underscore-separated AND concatenated). This lets the index fuzzy-match phonetic variants (e.g. `naiyya` vs `nayya`, `bhajana` vs `bajana`) AND queries where adjacent words run together in the source lyric (e.g. `pranava svarupa` matching the lyric token `pranavasvarupa`).
+2. **LGBMRanker reranking** — a LightGBM learning-to-rank model re-scores the top 20 BM25 candidates. Features include BM25 score, word and character-n-gram overlap, exact phrase match, and `picked_for_this_query` — a per-(query, song) memory feature that lets a single confirmed pick reliably surface that song on the next identical search.
 
 ### Normalization rules
 
@@ -16,6 +16,7 @@ Before indexing or querying, text goes through:
 - Diphthong collapse: `ai → a`, `au → a`
 - Vowel length collapse: `aa → a`, `ee/ii → i`, `oo/uu → u`
 - Aspirate collapse: `bh → b`, `dh → d`, `gh → g`, `th → t`, `sh → s`, etc.
+- `w → v` (English transliterations like `swarupa` map to corpus `svarupa`)
 
 ## Project structure
 
@@ -62,7 +63,7 @@ python -m uvicorn backend.app:app --reload --port 8000
 
 The FastAPI server serves both the API and the static frontend on the same port. The UI provides:
 - **Search box** → top pick (highlighted) + shortlist of 5
-- **Click-to-select feedback** — click the top pick or any shortlist item to mark it as correct. Each click logs ground truth and triggers a background retrain so the next search uses the updated model
+- **Click-to-select feedback** — click the top pick or any shortlist item to mark it as correct. Each click logs ground truth and triggers a background retrain. Because the ranker has a per-(query, song) memory feature, a single click is enough — repeating that exact query will surface the picked song at the top
 - **Database typeahead** for the rare case the correct song isn't in the shortlist — search by song name or composer, click a result to log it
 - **Live stats** (queries logged, ML accuracy, shortlist recall) and a manual Retrain button
 
@@ -78,6 +79,8 @@ Commands at the prompt:
 - Press Enter to confirm the top pick is correct, or type the correct song name
 - `retrain` — retrain the LGBMRanker from collected feedback
 - `quit` — exit
+
+The CLI and the web app share a single feedback log at the project root (`feedback_log.jsonl`), so picks made in one are seen by the other.
 
 ### API endpoints
 
