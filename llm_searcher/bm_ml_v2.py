@@ -267,19 +267,44 @@ def retrain(min_samples: int = 50):
 
 
 # -----------------------
-# Stage 2: ML Ranker
+# Stage 2: ML Ranker (blended with BM25)
 # -----------------------
-def ml_rank(query: str, candidates: list) -> tuple:
-    """Re-rank candidates; returns (best_candidate, ranked_list)."""
-    ranker = load_ranker()
+# How much the ranker can shift the order, expressed as a fraction of the
+# top-20 BM25 score range. With 0.2: the most-favored candidate gets an extra
+# 20% of the BM25 spread, the least-favored gets 0. Keeps BM25 as the primary
+# signal — clear BM25 winners stay on top — while the ranker nudges close calls.
+RANKER_WEIGHT = 0.2
 
+
+def ml_rank(query: str, candidates: list) -> tuple:
+    """Re-rank candidates; returns (best_candidate, ranked_list).
+
+    Final score = BM25 + RANKER_WEIGHT * (BM25 spread) * normalized_ranker_score.
+    """
+    if not candidates:
+        return None, []
+
+    bm25 = np.array([c["score"] for c in candidates], dtype=float)
+
+    ranker = load_ranker()
     if ranker is None:
+        # candidates already arrive sorted by BM25 from search_bm25
         return candidates[0], candidates
 
     qs_counts = _load_query_song_counts()
     features = np.array([extract_features(query, c, qs_counts) for c in candidates])
-    scores = ranker.predict(features)
-    order = np.argsort(scores)[::-1]
+    ranker_scores = ranker.predict(features)
+
+    bm25_spread = max(float(bm25.max() - bm25.min()), 1.0)
+    r_spread = float(ranker_scores.max() - ranker_scores.min())
+    if r_spread > 0:
+        ranker_norm = (ranker_scores - ranker_scores.min()) / r_spread  # 0..1
+        nudge = ranker_norm * RANKER_WEIGHT * bm25_spread
+    else:
+        nudge = np.zeros_like(bm25)
+
+    final = bm25 + nudge
+    order = np.argsort(final)[::-1]
     ranked = [candidates[i] for i in order]
     return ranked[0], ranked
 
