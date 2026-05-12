@@ -19,6 +19,8 @@ def normalize(text: str) -> str:
 
     # Order matters: longer patterns before shorter ones
     replacements = [
+        # Diphthongs (before vowel-length rules to avoid partial collapses)
+        ("ai", "a"), ("au", "a"),
         # Vowel length
         ("aa", "a"), ("ee", "i"), ("ii", "i"), ("oo", "u"), ("uu", "u"),
         # Aspirate consonants

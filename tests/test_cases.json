@@ -1,0 +1,22 @@
+[
+  {"query": "lalithe shri pravridhe",                              "correct_song": "lalithE sri"},
+  {"query": "ramachandram bhavayami",                              "correct_song": "raamachandram bhaavayami"},
+  {"query": "ninne nammithi naiyya sri rama",                      "correct_song": "ninnE nammitinayyA"},
+  {"query": "ninne nammithi naiyya sri rama rama",                 "correct_song": "ninnE nammitinayyA"},
+  {"query": "jagadaanandakaarakaa",                                "correct_song": "jagadaananda kaarakaa"},
+  {"query": "jagadananda karaka",                                  "correct_song": "jagadaananda kaarakaa"},
+  {"query": "brovabarama raghurama",                               "correct_song": "brOva baarama"},
+  {"query": "shankari shankuru shandramuki akhilandeshwari",       "correct_song": "shankari shankari"},
+  {"query": "shri maha ganapati rava tumam",                       "correct_song": "srI mahAgaNapatiravatu mAm"},
+  {"query": "shyama krishna sodhari gauri",                        "correct_song": "birAna varAlicci"},
+  {"query": "muni manasa rama",                                    "correct_song": "raama raama guNaseema"},
+  {"query": "manasa sancharane",                                   "correct_song": "manasa sanchararE"},
+  {"query": "deva deva calayamite sharanambuja",                   "correct_song": "dEva dEva kalayaami"},
+  {"query": "kanakanaruchiraa kana kava",                          "correct_song": "kanaka na ruchiraa"},
+  {"query": "ananda natana prakasham jithaveham",                  "correct_song": "anandha naTana prakaasham"},
+  {"query": "karunimpa idi nampi",                                 "correct_song": "karuNimpa idhi (varNam)"},
+  {"query": "nagumomu kalaneni nashayani thelisi",                 "correct_song": "nagumOmu ganalEni"},
+  {"query": "entharo mahanupavu lu",                               "correct_song": "endharO mahaanubhaavulu"},
+  {"query": "maya theetha swaroopini",                             "correct_song": "maayaathitha"},
+  {"query": "sanandha hridaya nilaye shadaye sapta",               "correct_song": "aanandaamrutha"}
+]
