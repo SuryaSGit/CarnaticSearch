@@ -30,6 +30,9 @@ def normalize(text: str) -> str:
         ("sh", "s"), ("ṣ", "s"), ("ś", "s"),
         ("ṅ", "n"), ("ñ", "n"), ("ṇ", "n"),
         ("ṭ", "t"), ("ḍ", "d"),
+        # English 'w' is interchangeable with 'v' in Sanskrit/Telugu transliteration
+        # (e.g. 'swami' / 'svami', 'swarupa' / 'svarupa').
+        ("w", "v"),
     ]
     for src, dst in replacements:
         text = text.replace(src, dst)
@@ -45,11 +48,14 @@ def normalize(text: str) -> str:
 # -----------------------
 def tokenize(text: str) -> list:
     """
-    Word tokens + character n-grams (3–4) + word bigrams.
+    Word tokens + character n-grams (3–4) + word bigrams (separated and concatenated).
 
     Character n-grams let BM25 match phonetic variants that share substrings
     even after normalization (e.g. 'rama' ↔ 'raman' share 'ram', 'ama').
-    Word bigrams capture contiguous phrase context.
+    Word bigrams capture contiguous phrase context. The CONCATENATED bigram
+    (no separator) handles the common Carnatic-lyric case where adjacent
+    words are written as one — e.g. 'pranavasvarupa' in the lyric matching
+    'pranava svarupa' in the query.
     """
     words = text.split()
     tokens = list(words)
@@ -61,6 +67,7 @@ def tokenize(text: str) -> list:
 
     for i in range(len(words) - 1):
         tokens.append(f"{words[i]}_{words[i + 1]}")
+        tokens.append(f"{words[i]}{words[i + 1]}")
 
     return tokens
 
