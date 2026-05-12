@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+pydantic
+rank_bm25
+lightgbm
+numpy
