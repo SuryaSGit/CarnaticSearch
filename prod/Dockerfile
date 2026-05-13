@@ -1,5 +1,10 @@
 FROM python:3.11-slim
 
+# libgomp1 is required by lightgbm at import time
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # HF Spaces requires running as a non-root user
 RUN useradd -m -u 1000 user
 USER user
