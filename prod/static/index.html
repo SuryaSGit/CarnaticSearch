@@ -9,8 +9,17 @@
 <body>
   <main>
     <header>
-      <h1>CarnaticSearch</h1>
-      <p class="subtitle">Find a kriti by lyric snippet — typos and transliteration variants welcome.</p>
+      <div class="header-row">
+        <div>
+          <h1>CarnaticSearch</h1>
+          <p class="subtitle">Find a kriti by lyric snippet — typos and transliteration variants welcome.</p>
+        </div>
+        <a id="report-bug" class="report-bug-btn"
+           href="https://docs.google.com/forms/d/e/1FAIpQLSfjL2_Zub0BjFJd8jShXcDGIl1NIOoz3GigQs0UiGgzdb2_Rg/viewform?usp=publish-editor"
+           target="_blank" rel="noopener noreferrer">
+          Report a bug
+        </a>
+      </div>
     </header>
 
     <section class="search-box">
@@ -27,7 +36,11 @@
     </section>
 
     <section id="results" class="hidden">
-      <p class="hint">Click the song that's actually correct — your pick trains the model.</p>
+      <p class="hint">
+        Click any result to look it up on karnatik.com. Use the
+        <strong>This is my song</strong> button to mark the correct one
+        — that's what trains the model.
+      </p>
       <div id="top-pick"></div>
       <h2>Shortlist</h2>
       <ol id="shortlist"></ol>
@@ -43,6 +56,11 @@
               autocomplete="off"
             />
             <ul id="typeahead-results" class="hidden"></ul>
+            <p class="typeahead-fallback">
+              Can't find the song?
+              <a href="https://docs.google.com/forms/d/e/1FAIpQLSfjL2_Zub0BjFJd8jShXcDGIl1NIOoz3GigQs0UiGgzdb2_Rg/viewform?usp=publish-editor"
+                 target="_blank" rel="noopener noreferrer">Report it here</a>.
+            </p>
           </div>
         </details>
         <p id="feedback-status"></p>

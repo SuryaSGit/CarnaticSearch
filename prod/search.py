@@ -59,7 +59,16 @@ def normalize(text: str) -> str:
 # -----------------------
 # Tokenization
 # -----------------------
-def tokenize(text: str) -> list:
+def tokenize(text: str, expand_splits: bool = False) -> list:
+    """
+    Word tokens + char n-grams (3-4) + word bigrams (separated and concatenated).
+
+    expand_splits=True (queries only): for each query word >5 chars, also emit
+    every 2-piece split. Inverse of the concat bigram — when the *query* glues
+    two words together (e.g. 'munimanasa') we emit candidate splits ('muni',
+    'manasa', etc.) so real ones match individual lyric words. Junk splits
+    have no doc matches and contribute 0.
+    """
     words = text.split()
     tokens = list(words)
 
@@ -71,6 +80,13 @@ def tokenize(text: str) -> list:
     for i in range(len(words) - 1):
         tokens.append(f"{words[i]}_{words[i + 1]}")
         tokens.append(f"{words[i]}{words[i + 1]}")
+
+    if expand_splits:
+        for word in words:
+            if len(word) > 5:
+                for i in range(3, len(word) - 2):
+                    tokens.append(word[:i])
+                    tokens.append(word[i:])
 
     return tokens
 
@@ -104,7 +120,7 @@ bm25 = BM25Okapi(docs)
 # -----------------------
 def search_bm25(query: str, top_k: int = 20) -> list:
     norm_q = normalize(query)
-    query_tokens = tokenize(norm_q)
+    query_tokens = tokenize(norm_q, expand_splits=True)
     scores = bm25.get_scores(query_tokens)
     top_indices = np.argsort(scores)[::-1][:top_k * 4]
 
@@ -153,9 +169,7 @@ def extract_features(query: str, candidate: dict, qs_counts: dict = None) -> lis
     q4 = _char_ngrams(norm_q, 4)
     l4 = _char_ngrams(norm_lyrics, 4)
 
-    pick_count = 0
-    if qs_counts is not None:
-        pick_count = qs_counts.get(norm_q, {}).get(candidate["song"], 0)
+    pick_count = _fuzzy_pick_count(norm_q, candidate["song"], qs_counts) if qs_counts else 0.0
 
     return [
         candidate.get("score", 0.0),
@@ -187,6 +201,16 @@ def save_ranker(ranker):
 
 
 def _load_query_song_counts() -> dict:
+    """
+    Returns:
+      { normalized_query: {
+          "trigrams": set(...),       # char-trigrams of space-stripped query
+          "picks": {song_name: count},
+        }
+      }
+    Trigrams precomputed at load time so per-search fuzzy matching is just
+    O(N_logged) Jaccard over precomputed sets.
+    """
     counts = {}
     if not os.path.exists(FEEDBACK_PATH):
         return counts
@@ -203,9 +227,43 @@ def _load_query_song_counts() -> dict:
             song = entry.get("correct_song", "")
             if not q or not song:
                 continue
-            counts.setdefault(q, {})
-            counts[q][song] = counts[q].get(song, 0) + 1
+            if q not in counts:
+                counts[q] = {
+                    "trigrams": _char_ngrams(q.replace(" ", ""), 3),
+                    "picks": {},
+                }
+            counts[q]["picks"][song] = counts[q]["picks"].get(song, 0) + 1
     return counts
+
+
+# Above this threshold a logged query's picks contribute (scaled by similarity)
+# to the pick_count feature for the current query.
+QUERY_SIM_THRESHOLD = 0.5
+
+
+def _fuzzy_pick_count(norm_q: str, song: str, qs_counts: dict) -> float:
+    """Sum of pick counts across logged queries similar enough to the current.
+    Exact match contributes its full count; fuzzy matches contribute (sim * count)."""
+    if not qs_counts:
+        return 0.0
+    current_trigrams = _char_ngrams(norm_q.replace(" ", ""), 3)
+    if not current_trigrams:
+        return 0.0
+    total = 0.0
+    for logged_q, info in qs_counts.items():
+        picks_for_song = info["picks"].get(song, 0)
+        if picks_for_song == 0:
+            continue
+        if logged_q == norm_q:
+            total += picks_for_song
+            continue
+        union = current_trigrams | info["trigrams"]
+        if not union:
+            continue
+        sim = len(current_trigrams & info["trigrams"]) / len(union)
+        if sim >= QUERY_SIM_THRESHOLD:
+            total += sim * picks_for_song
+    return total
 
 
 def retrain(min_samples: int = 1):
@@ -238,9 +296,16 @@ def retrain(min_samples: int = 1):
 
 
 # -----------------------
-# Blend ranker as bounded nudge
+# Blend ranker as bounded nudge + inference-time pick boost
 # -----------------------
 RANKER_WEIGHT = 0.2
+
+# Inference-time deterministic boost for songs the user has previously picked
+# for this query (or a similar one — see _fuzzy_pick_count). Each unit of
+# pick_count adds (PICK_BOOST_PER_COUNT * bm25_spread) to the final score.
+# 1.0 = a single confirmed pick adds the FULL BM25 spread, enough to overtake
+# the BM25 leader. Applied AFTER the ranker so it doesn't pollute training.
+PICK_BOOST_PER_COUNT = 1.0
 
 
 def ml_rank(query: str, candidates: list) -> tuple:
@@ -248,24 +313,29 @@ def ml_rank(query: str, candidates: list) -> tuple:
         return None, []
 
     bm25 = np.array([c["score"] for c in candidates], dtype=float)
+    bm25_spread = max(float(bm25.max() - bm25.min()), 1.0)
+    norm_q = normalize(query)
+
+    qs_counts = _load_query_song_counts()
+    pick_counts = np.array([
+        _fuzzy_pick_count(norm_q, c["song"], qs_counts) for c in candidates
+    ])
+    pick_boost = PICK_BOOST_PER_COUNT * bm25_spread * pick_counts
 
     ranker = load_ranker()
     if ranker is None:
-        return candidates[0], candidates
-
-    qs_counts = _load_query_song_counts()
-    features = np.array([extract_features(query, c, qs_counts) for c in candidates])
-    ranker_scores = ranker.predict(features)
-
-    bm25_spread = max(float(bm25.max() - bm25.min()), 1.0)
-    r_spread = float(ranker_scores.max() - ranker_scores.min())
-    if r_spread > 0:
-        ranker_norm = (ranker_scores - ranker_scores.min()) / r_spread
-        nudge = ranker_norm * RANKER_WEIGHT * bm25_spread
+        final = bm25 + pick_boost
     else:
-        nudge = np.zeros_like(bm25)
+        features = np.array([extract_features(query, c, qs_counts) for c in candidates])
+        ranker_scores = ranker.predict(features)
+        r_spread = float(ranker_scores.max() - ranker_scores.min())
+        if r_spread > 0:
+            ranker_norm = (ranker_scores - ranker_scores.min()) / r_spread
+            nudge = ranker_norm * RANKER_WEIGHT * bm25_spread
+        else:
+            nudge = np.zeros_like(bm25)
+        final = bm25 + nudge + pick_boost
 
-    final = bm25 + nudge
     order = np.argsort(final)[::-1]
     ranked = [candidates[i] for i in order]
     return ranked[0], ranked

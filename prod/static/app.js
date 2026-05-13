@@ -65,24 +65,45 @@ function renderResults({ top_pick, shortlist }) {
 
   // Top pick
   els.topPick.innerHTML = `
-    <div class="label">Top pick — click if correct</div>
-    <h2 class="song-name">${escapeHtml(top_pick.song)}</h2>
-    <p class="composer">${escapeHtml(top_pick.composer)}</p>
-    <p class="lyrics-preview">${escapeHtml(truncate(top_pick.lyrics, 240))}</p>
+    <div class="label">Top pick</div>
+    <div class="song-info">
+      <h2 class="song-name">${escapeHtml(top_pick.song)}</h2>
+      <p class="composer">${escapeHtml(top_pick.composer)}</p>
+      <p class="lyrics-preview">${escapeHtml(truncate(top_pick.lyrics, 240))}</p>
+    </div>
+    <button class="confirm-btn" type="button">✓ This is my song</button>
   `;
-  els.topPick.onclick = () => selectAnswer(top_pick.song, els.topPick);
+  els.topPick.onclick = () => openKarnatik(top_pick);
+  els.topPick.querySelector(".confirm-btn").onclick = (e) => {
+    e.stopPropagation();
+    selectAnswer(top_pick.song, els.topPick);
+  };
 
   // Shortlist
   els.shortlist.innerHTML = "";
   shortlist.forEach((s) => {
     const li = document.createElement("li");
     li.innerHTML = `
-      <div class="song-name">${escapeHtml(s.song)}</div>
-      <div class="composer">${escapeHtml(s.composer)}</div>
+      <div class="song-info">
+        <div class="song-name">${escapeHtml(s.song)}</div>
+        <div class="composer">${escapeHtml(s.composer)}</div>
+      </div>
+      <button class="confirm-btn" type="button">✓ This is my song</button>
     `;
-    li.onclick = () => selectAnswer(s.song, li);
+    li.onclick = () => openKarnatik(s);
+    li.querySelector(".confirm-btn").onclick = (e) => {
+      e.stopPropagation();
+      selectAnswer(s.song, li);
+    };
     els.shortlist.appendChild(li);
   });
+}
+
+
+function openKarnatik(song) {
+  const q = `karnatik.com ${song.song} ${song.composer}`;
+  const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 
@@ -93,11 +114,28 @@ function selectAnswer(songName, clickedEl) {
   if (feedbackLocked) return;
   feedbackLocked = true;
 
-  // Visual feedback
+  // Visual feedback on the chosen card
   clickedEl.classList.add("selected");
-  document.querySelectorAll("#shortlist li, #top-pick").forEach((el) => {
-    if (el !== clickedEl) el.classList.add("disabled");
+
+  // Disable every confirm button across the result list (whole cards stay
+  // clickable so users can keep opening karnatik.com pages after marking).
+  document.querySelectorAll(".confirm-btn").forEach((btn) => {
+    btn.disabled = true;
+    if (btn.closest("li") === clickedEl || btn.closest("#top-pick") === clickedEl) {
+      btn.textContent = "✓ Marked correct";
+      btn.classList.add("confirmed");
+    } else {
+      btn.classList.add("dimmed");
+    }
   });
+
+  // Update top-pick label too
+  const labelEl = els.topPick.querySelector(".label");
+  if (labelEl && clickedEl !== els.topPick) {
+    labelEl.textContent = "Top pick (you marked another song correct)";
+  } else if (labelEl) {
+    labelEl.textContent = "Top pick — confirmed";
+  }
 
   submitFeedback(songName);
 }
