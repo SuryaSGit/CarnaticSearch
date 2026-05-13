@@ -1,0 +1,9 @@
+__pycache__
+*.pyc
+*.pyo
+.DS_Store
+.git
+.gitignore
+state/
+*.pkl
+README.md

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CarnaticSearch</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>CarnaticSearch</h1>
+      <p class="subtitle">Find a kriti by lyric snippet — typos and transliteration variants welcome.</p>
+    </header>
+
+    <section class="search-box">
+      <form id="search-form">
+        <input
+          id="query"
+          type="text"
+          placeholder="e.g. ninne nammithi naiyya sri rama"
+          autocomplete="off"
+          autofocus
+        />
+        <button type="submit" id="search-btn">Search</button>
+      </form>
+    </section>
+
+    <section id="results" class="hidden">
+      <p class="hint">Click the song that's actually correct — your pick trains the model.</p>
+      <div id="top-pick"></div>
+      <h2>Shortlist</h2>
+      <ol id="shortlist"></ol>
+
+      <div id="feedback-section" class="hidden">
+        <details id="not-in-list">
+          <summary>Correct song not shown? Search the database</summary>
+          <div class="typeahead">
+            <input
+              id="correct-song"
+              type="text"
+              placeholder="Type a song name or composer…"
+              autocomplete="off"
+            />
+            <ul id="typeahead-results" class="hidden"></ul>
+          </div>
+        </details>
+        <p id="feedback-status"></p>
+      </div>
+    </section>
+
+    <section id="stats-section">
+      <div class="stats-header">
+        <h3>Live stats</h3>
+        <button id="retrain-btn" class="ghost-btn">Retrain ML ranker</button>
+      </div>
+      <div id="stats"></div>
+      <p id="retrain-status"></p>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
