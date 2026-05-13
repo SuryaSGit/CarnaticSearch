@@ -300,6 +300,22 @@ h2 {
 
 #typeahead-results .empty:hover { background: var(--card); }
 
+.typeahead-fallback {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.typeahead-fallback a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent);
+}
+
+.typeahead-fallback a:hover {
+  border-bottom-style: solid;
+}
+
 #correct-song {
   flex: 1;
   padding: 10px 12px;
