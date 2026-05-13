@@ -46,9 +46,10 @@ def normalize(text: str) -> str:
 # -----------------------
 # Tokenization
 # -----------------------
-def tokenize(text: str) -> list:
+def tokenize(text: str, expand_splits: bool = False) -> list:
     """
-    Word tokens + character n-grams (3–4) + word bigrams (separated and concatenated).
+    Word tokens + character n-grams (3–4) + word bigrams (separated and
+    concatenated). Used for both indexing and querying.
 
     Character n-grams let BM25 match phonetic variants that share substrings
     even after normalization (e.g. 'rama' ↔ 'raman' share 'ram', 'ama').
@@ -56,6 +57,13 @@ def tokenize(text: str) -> list:
     (no separator) handles the common Carnatic-lyric case where adjacent
     words are written as one — e.g. 'pranavasvarupa' in the lyric matching
     'pranava svarupa' in the query.
+
+    expand_splits=True (queries only): for each query word >5 chars, also
+    emit every 2-piece split. This is the inverse of the concat bigram —
+    when the *query* glues two words together (e.g. 'munimanasa') we emit
+    all candidate splits ('muni'/'manasa', etc.) so the real ones match
+    individual lyric words. Splits that don't form real words just have
+    no effect (no doc has them, so BM25 contributes 0).
     """
     words = text.split()
     tokens = list(words)
@@ -68,6 +76,13 @@ def tokenize(text: str) -> list:
     for i in range(len(words) - 1):
         tokens.append(f"{words[i]}_{words[i + 1]}")
         tokens.append(f"{words[i]}{words[i + 1]}")
+
+    if expand_splits:
+        for word in words:
+            if len(word) > 5:
+                for i in range(3, len(word) - 2):
+                    tokens.append(word[:i])
+                    tokens.append(word[i:])
 
     return tokens
 
@@ -106,7 +121,7 @@ bm25 = BM25Okapi(docs)
 # -----------------------
 def search_bm25(query: str, top_k: int = 20) -> list:
     norm_q = normalize(query)
-    query_tokens = tokenize(norm_q)
+    query_tokens = tokenize(norm_q, expand_splits=True)
 
     scores = bm25.get_scores(query_tokens)
     top_indices = np.argsort(scores)[::-1][:top_k * 4]  # oversample then dedupe
