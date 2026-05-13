@@ -104,6 +104,22 @@ button:disabled { opacity: 0.5; cursor: wait; }
   background: var(--accent-light);
 }
 
+.picked-badge {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 3px 10px;
+  background: var(--success);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+}
+
+#shortlist li .picked-badge {
+  margin-top: 6px;
+}
+
 #top-pick .label {
   font-size: 0.75rem;
   text-transform: uppercase;

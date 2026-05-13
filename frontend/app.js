@@ -99,6 +99,22 @@ function selectAnswer(songName, clickedEl) {
     if (el !== clickedEl) el.classList.add("disabled");
   });
 
+  // Swap the top-pick label to a confirmed state
+  const labelEl = els.topPick.querySelector(".label");
+  if (labelEl) {
+    labelEl.textContent = clickedEl === els.topPick
+      ? "✓ Marked correct"
+      : "Top pick (you marked another song correct)";
+  }
+
+  // Append a check badge to whatever the user clicked
+  if (!clickedEl.querySelector(".picked-badge")) {
+    const badge = document.createElement("span");
+    badge.className = "picked-badge";
+    badge.textContent = "✓ Your pick";
+    clickedEl.appendChild(badge);
+  }
+
   submitFeedback(songName);
 }
 
