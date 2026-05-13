@@ -97,16 +97,54 @@ def search(req: SearchRequest):
     )
 
 
+def _norm_song(name: str) -> str:
+    return name.strip().lower()
+
+
+def _lookup_song(name: str) -> dict | None:
+    """Find the canonical record for a song name in the corpus (case-insensitive)."""
+    target = _norm_song(name)
+    for rec in searcher.metadata:
+        if _norm_song(rec.get("Song Name", "")) == target:
+            return {
+                "song": rec["Song Name"],
+                "composer": rec.get("Composer", ""),
+                "lyrics": rec.get("Lyrics", ""),
+                "score": 0.0,
+            }
+    return None
+
+
 @app.post("/feedback")
 def feedback(req: FeedbackRequest):
+    correct_norm = _norm_song(req.correct_song)
+    candidates = list(req.shortlist)
+
+    # If the user picked from the typeahead (song not in shortlist), inject it
+    # into the candidate list so the entry has a positive label and retrain can
+    # use it. Look up the song's actual BM25 score by re-running BM25 over the
+    # query — gives the ranker a realistic feature value rather than a dummy.
+    if not any(_norm_song(s.get("song", "")) == correct_norm for s in candidates):
+        bm25_top = searcher.search_bm25(req.query, top_k=40)
+        match = next((c for c in bm25_top if _norm_song(c["song"]) == correct_norm), None)
+        if match is not None:
+            candidates.append(match)
+        else:
+            # Not in BM25 top 40: still trainable, but pull the real lyrics
+            # from the corpus so feature extraction has meaningful values.
+            stub = _lookup_song(req.correct_song)
+            if stub is None:
+                stub = {"song": req.correct_song, "composer": "", "lyrics": "", "score": 0.0}
+            candidates.append(stub)
+
     labels = [
-        1 if s.get("song", "").strip().lower() == req.correct_song.strip().lower() else 0
-        for s in req.shortlist
+        1 if _norm_song(s.get("song", "")) == correct_norm else 0
+        for s in candidates
     ]
     entry = {
         "query": req.query,
         "correct_song": req.correct_song,
-        "candidates": req.shortlist,
+        "candidates": candidates,
         "labels": labels,
         "correct_in_shortlist": 1 in labels,
         "ml_pick": req.ml_pick,

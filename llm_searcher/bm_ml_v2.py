@@ -185,9 +185,8 @@ def extract_features(query: str, candidate: dict, qs_counts: dict = None) -> lis
     q4 = _char_ngrams(norm_q, 4)
     l4 = _char_ngrams(norm_lyrics, 4)
 
-    pick_count = 0
-    if qs_counts is not None:
-        pick_count = qs_counts.get(norm_q, {}).get(candidate["song"], 0)
+    # Combined exact-match + similarity-weighted fuzzy match.
+    pick_count = _fuzzy_pick_count(norm_q, candidate["song"], qs_counts) if qs_counts else 0.0
 
     return [
         candidate.get("score", 0.0),                             # BM25 score
@@ -224,7 +223,18 @@ def save_ranker(ranker):
 
 
 def _load_query_song_counts() -> dict:
-    """Read feedback log, return {normalized_query: {song_name: pick_count}}."""
+    """
+    Read feedback log, return:
+      {
+        normalized_query: {
+          "trigrams": set(...),       # char-trigrams of space-stripped query
+          "picks": {song_name: count},
+        }
+      }
+
+    The trigrams are precomputed at load time so per-search fuzzy matching
+    (in extract_features) is just an O(N_logged) Jaccard over precomputed sets.
+    """
     counts = {}
     if not os.path.exists(FEEDBACK_PATH):
         return counts
@@ -241,9 +251,47 @@ def _load_query_song_counts() -> dict:
             song = entry.get("correct_song", "")
             if not q or not song:
                 continue
-            counts.setdefault(q, {})
-            counts[q][song] = counts[q].get(song, 0) + 1
+            if q not in counts:
+                counts[q] = {
+                    "trigrams": _char_ngrams(q.replace(" ", ""), 3),
+                    "picks": {},
+                }
+            counts[q]["picks"][song] = counts[q]["picks"].get(song, 0) + 1
     return counts
+
+
+# Above this threshold, a logged query's picks contribute (scaled by similarity)
+# to the pick_count feature for the current query.
+QUERY_SIM_THRESHOLD = 0.5
+
+
+def _fuzzy_pick_count(norm_q: str, song: str, qs_counts: dict) -> float:
+    """
+    Sum of pick counts across logged queries similar enough to the current one.
+    Exact-match contributes its full count; fuzzy matches contribute (sim * count).
+    """
+    if not qs_counts:
+        return 0.0
+    current_trigrams = _char_ngrams(norm_q.replace(" ", ""), 3)
+    if not current_trigrams:
+        return 0.0
+
+    total = 0.0
+    for logged_q, info in qs_counts.items():
+        picks_for_song = info["picks"].get(song, 0)
+        if picks_for_song == 0:
+            continue
+        if logged_q == norm_q:
+            total += picks_for_song
+            continue
+        logged_trigrams = info["trigrams"]
+        union = current_trigrams | logged_trigrams
+        if not union:
+            continue
+        sim = len(current_trigrams & logged_trigrams) / len(union)
+        if sim >= QUERY_SIM_THRESHOLD:
+            total += sim * picks_for_song
+    return total
 
 
 def retrain(min_samples: int = 50):
