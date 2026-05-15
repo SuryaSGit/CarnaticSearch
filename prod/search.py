@@ -114,11 +114,21 @@ for song in data:
 
 bm25 = BM25Okapi(docs)
 
+# Song name -> chunk indices, for computing best-chunk BM25 score on demand.
+_SONG_TO_CHUNKS: dict = {}
+for _i, _rec in enumerate(metadata):
+    _SONG_TO_CHUNKS.setdefault(_rec["Song Name"], []).append(_i)
+
 
 # -----------------------
 # BM25 retrieval
 # -----------------------
-def search_bm25(query: str, top_k: int = 20) -> list:
+def search_bm25(query: str, top_k: int = 20, pin_songs: set = None) -> list:
+    """
+    Return top_k unique songs by BM25, plus any songs in pin_songs that fell
+    below the cutoff (so previously-picked songs stay eligible for the
+    inference-time pick boost).
+    """
     norm_q = normalize(query)
     query_tokens = tokenize(norm_q, expand_splits=True)
     scores = bm25.get_scores(query_tokens)
@@ -142,6 +152,23 @@ def search_bm25(query: str, top_k: int = 20) -> list:
         seen.add(key)
         if len(results) == top_k:
             break
+
+    if pin_songs:
+        existing = {r["song"] for r in results}
+        for song_name in pin_songs:
+            if song_name in existing:
+                continue
+            chunk_idxs = _SONG_TO_CHUNKS.get(song_name)
+            if not chunk_idxs:
+                continue
+            best_idx = max(chunk_idxs, key=lambda i: scores[i])
+            song_rec = metadata[best_idx]
+            results.append({
+                "song": song_rec["Song Name"],
+                "composer": song_rec["Composer"],
+                "lyrics": song_rec["Lyrics"],
+                "score": float(scores[best_idx]),
+            })
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results
@@ -341,7 +368,28 @@ def ml_rank(query: str, candidates: list) -> tuple:
     return ranked[0], ranked
 
 
+def _songs_with_picks(norm_q: str, qs_counts: dict) -> set:
+    """Names of songs with nonzero fuzzy pick_count for this query."""
+    if not qs_counts:
+        return set()
+    out = set()
+    current_trigrams = _char_ngrams(norm_q.replace(" ", ""), 3)
+    for logged_q, info in qs_counts.items():
+        if logged_q == norm_q:
+            out.update(info["picks"].keys())
+            continue
+        union = current_trigrams | info["trigrams"]
+        if not union:
+            continue
+        sim = len(current_trigrams & info["trigrams"]) / len(union)
+        if sim >= QUERY_SIM_THRESHOLD:
+            out.update(info["picks"].keys())
+    return out
+
+
 def search(query: str, shortlist_size: int = 5):
-    candidates = search_bm25(query, top_k=20)
+    qs_counts = _load_query_song_counts()
+    pinned = _songs_with_picks(normalize(query), qs_counts)
+    candidates = search_bm25(query, top_k=20, pin_songs=pinned)
     best, ranked = ml_rank(query, candidates)
     return best, ranked[:shortlist_size]
