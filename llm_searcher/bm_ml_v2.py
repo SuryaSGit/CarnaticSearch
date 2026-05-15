@@ -291,7 +291,16 @@ def _load_query_song_counts() -> dict:
                     "trigrams": _char_ngrams(q.replace(" ", ""), 3),
                     "picks": {},
                 }
-            counts[q]["picks"][song] = counts[q]["picks"].get(song, 0) + 1
+            if entry.get("revoke"):
+                # Revocation entry: decrement count (clamped at 0).
+                counts[q]["picks"][song] = max(0, counts[q]["picks"].get(song, 0) - 1)
+            else:
+                counts[q]["picks"][song] = counts[q]["picks"].get(song, 0) + 1
+    # Drop entries that have decayed to zero so they don't waste lookups
+    for q, info in list(counts.items()):
+        info["picks"] = {s: c for s, c in info["picks"].items() if c > 0}
+        if not info["picks"]:
+            del counts[q]
     return counts
 
 

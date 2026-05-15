@@ -384,6 +384,16 @@ h2 {
 
 #feedback-status.error { color: var(--error); }
 
+.undo-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent);
+  margin-left: 4px;
+  font-weight: 500;
+}
+
+.undo-link:hover { border-bottom-style: solid; }
+
 /* Stats */
 #stats-section {
   margin-top: 48px;

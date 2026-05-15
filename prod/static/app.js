@@ -19,8 +19,9 @@ const els = {
   retrainStatus:  $("#retrain-status"),
 };
 
-let lastResult       = null;   // { query, top_pick, shortlist }
-let feedbackLocked   = false;  // prevent double-submission per result
+let lastResult     = null;   // { query, top_pick, shortlist }
+let lastPick       = null;   // { song, element } — what's currently marked correct, if anything
+let feedbackInFlight = false;  // gate concurrent network calls only
 
 
 // -----------------------
@@ -35,7 +36,7 @@ els.form.addEventListener("submit", async (e) => {
   els.searchBtn.textContent = "Searching…";
   els.feedbackStatus.textContent = "";
   els.feedbackStatus.classList.remove("error");
-  feedbackLocked = false;
+  lastPick = null;
 
   try {
     const r = await fetch(`${API}/search`, {
@@ -110,34 +111,119 @@ function openKarnatik(song) {
 // -----------------------
 // Feedback (click on top pick or shortlist item)
 // -----------------------
-function selectAnswer(songName, clickedEl) {
-  if (feedbackLocked) return;
-  feedbackLocked = true;
+async function selectAnswer(songName, clickedEl) {
+  if (feedbackInFlight) return;
+  if (lastPick && lastPick.song === songName) return;  // already marked
 
-  // Visual feedback on the chosen card
-  clickedEl.classList.add("selected");
+  feedbackInFlight = true;
+  els.feedbackStatus.textContent = "Saving…";
+  els.feedbackStatus.classList.remove("error");
 
-  // Disable every confirm button across the result list (whole cards stay
-  // clickable so users can keep opening karnatik.com pages after marking).
-  document.querySelectorAll(".confirm-btn").forEach((btn) => {
-    btn.disabled = true;
-    if (btn.closest("li") === clickedEl || btn.closest("#top-pick") === clickedEl) {
-      btn.textContent = "✓ Marked correct";
-      btn.classList.add("confirmed");
-    } else {
-      btn.classList.add("dimmed");
+  try {
+    // Switch case: revoke the previous pick first so counts don't double up
+    if (lastPick) {
+      await revokePrevious();
+      lastPick = null;
     }
-  });
 
-  // Update top-pick label too
-  const labelEl = els.topPick.querySelector(".label");
-  if (labelEl && clickedEl !== els.topPick) {
-    labelEl.textContent = "Top pick (you marked another song correct)";
-  } else if (labelEl) {
-    labelEl.textContent = "Top pick — confirmed";
+    // Apply the new pick
+    const result = await submitFeedback(songName);
+    setPickedVisual(clickedEl);
+    lastPick = { song: songName, element: clickedEl };
+    appendUndoLink(result.message);
+  } finally {
+    feedbackInFlight = false;
   }
+}
 
-  submitFeedback(songName);
+
+async function undoPick() {
+  if (feedbackInFlight || !lastPick) return;
+  feedbackInFlight = true;
+  els.feedbackStatus.textContent = "Undoing…";
+  els.feedbackStatus.classList.remove("error");
+  try {
+    await revokePrevious();
+    clearPickedVisual();
+    lastPick = null;
+    els.feedbackStatus.textContent = "Pick undone.";
+  } finally {
+    feedbackInFlight = false;
+  }
+}
+
+
+async function revokePrevious() {
+  if (!lastPick || !lastResult) return;
+  try {
+    await fetch(`${API}/feedback/revoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: lastResult.query,
+        correct_song: lastPick.song,
+      }),
+    });
+  } catch (err) {
+    // Non-fatal — proceed with new pick anyway, the worst case is one
+    // duplicated entry that fuzzy-counting still handles.
+    console.warn("revoke failed:", err);
+  }
+  // Clear visuals on the previous card before re-applying
+  clearPickedVisual();
+}
+
+
+function setPickedVisual(clickedEl) {
+  // Card pick: highlight the chosen card, dim unpicked confirm buttons.
+  // Typeahead pick (clickedEl null): no card visual — the Undo link in
+  // the feedback status is the only affordance.
+  if (clickedEl != null) {
+    document.querySelectorAll(".confirm-btn").forEach((btn) => {
+      const ownerEl = btn.closest("li") || btn.closest("#top-pick");
+      if (ownerEl === clickedEl) {
+        btn.textContent = "✓ Marked correct";
+        btn.classList.add("confirmed");
+        btn.classList.remove("dimmed");
+      } else {
+        btn.textContent = "✓ This is my song";
+        btn.classList.remove("confirmed");
+        btn.classList.add("dimmed");
+      }
+    });
+    clickedEl.classList.add("selected");
+    const labelEl = els.topPick.querySelector(".label");
+    if (labelEl) {
+      labelEl.textContent = clickedEl === els.topPick
+        ? "Top pick — confirmed"
+        : "Top pick (you marked another song correct)";
+    }
+  }
+}
+
+
+function appendUndoLink(statusText) {
+  els.feedbackStatus.innerHTML = "";
+  els.feedbackStatus.append(document.createTextNode(statusText + " "));
+  const link = document.createElement("a");
+  link.href = "#";
+  link.className = "undo-link";
+  link.textContent = "Undo";
+  link.onclick = (e) => { e.preventDefault(); undoPick(); };
+  els.feedbackStatus.append(link);
+}
+
+
+function clearPickedVisual() {
+  document.querySelectorAll(".confirm-btn").forEach((btn) => {
+    btn.textContent = "✓ This is my song";
+    btn.classList.remove("confirmed", "dimmed");
+    btn.disabled = false;
+  });
+  document.querySelectorAll(".selected").forEach((el) => el.classList.remove("selected"));
+  document.querySelectorAll(".undo-btn").forEach((btn) => btn.remove());
+  const labelEl = els.topPick.querySelector(".label");
+  if (labelEl) labelEl.textContent = "Top pick";
 }
 
 
@@ -207,12 +293,10 @@ function renderTypeahead(matches) {
         const song = li.getAttribute("data-song");
         els.correctSong.value = song;
         els.typeaheadList.classList.add("hidden");
-        if (feedbackLocked) return;
-        feedbackLocked = true;
-        document.querySelectorAll("#shortlist li, #top-pick").forEach((el) =>
-          el.classList.add("disabled"),
-        );
-        submitFeedback(song);
+        // Route through selectAnswer so undo/switch behavior is consistent.
+        // No card to highlight (the song is being picked from the database
+        // typeahead, not from the shortlist), so we pass null.
+        selectAnswer(song, null);
       });
     });
   }
@@ -221,9 +305,7 @@ function renderTypeahead(matches) {
 
 
 async function submitFeedback(correctSong) {
-  if (!lastResult) return;
-  els.feedbackStatus.textContent = "Saving…";
-  els.feedbackStatus.classList.remove("error");
+  if (!lastResult) throw new Error("No active search");
 
   try {
     const r = await fetch(`${API}/feedback`, {
@@ -241,43 +323,37 @@ async function submitFeedback(correctSong) {
 
     let msg;
     if (data.ml_correct) {
-      msg = "Logged — ML got it right.";
+      msg = "Marked correct (ML had it).";
     } else if (data.correct_in_shortlist) {
-      msg = "Logged — correct was in shortlist but not top.";
+      msg = "Marked correct (was in shortlist, not top).";
     } else {
-      msg = "Logged — correct wasn't in shortlist.";
+      msg = "Marked correct (wasn't in shortlist).";
     }
 
-    els.feedbackStatus.textContent = msg + " Updating model…";
     els.correctSong.value = "";
     els.notInList.open = false;
     loadStats();
 
     // Auto-retrain in the background — each click moves the model
     autoRetrain();
+
+    return { message: msg };
   } catch (err) {
     els.feedbackStatus.textContent = `Feedback failed: ${err.message}`;
     els.feedbackStatus.classList.add("error");
-    feedbackLocked = false;  // allow retry
-    document.querySelectorAll("#shortlist li, #top-pick").forEach((el) =>
-      el.classList.remove("disabled", "selected"),
-    );
+    throw err;
   }
 }
 
 
 async function autoRetrain() {
+  // Silent: retrain in the background and refresh stats. We avoid touching
+  // the feedback status so the Undo link stays intact.
   try {
     const r = await fetch(`${API}/retrain`, { method: "POST" });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    const baseMsg = els.feedbackStatus.textContent.replace(/ Updating model…$/, "");
-    els.feedbackStatus.textContent = data.trained
-      ? baseMsg + " Model updated."
-      : baseMsg + " Need more samples to retrain.";
-    loadStats();
-  } catch (err) {
-    els.feedbackStatus.textContent += ` (retrain failed: ${err.message})`;
+    if (r.ok) loadStats();
+  } catch {
+    // ignore — stats will reflect actual state on next load
   }
 }
 

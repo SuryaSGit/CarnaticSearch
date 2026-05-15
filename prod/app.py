@@ -127,6 +127,24 @@ def feedback(req: FeedbackRequest):
     return {"ok": True, "ml_correct": entry["ml_correct"], "correct_in_shortlist": entry["correct_in_shortlist"]}
 
 
+class RevokeRequest(BaseModel):
+    query: str
+    correct_song: str
+
+
+@app.post("/feedback/revoke")
+def revoke_feedback(req: RevokeRequest):
+    """Append a revoke entry — _load_query_song_counts decrements the count."""
+    entry = {
+        "query": req.query,
+        "correct_song": req.correct_song,
+        "revoke": True,
+    }
+    with open(FEEDBACK_LOG, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    return {"ok": True}
+
+
 @app.post("/retrain")
 def retrain():
     ranker = search.retrain(min_samples=1)
