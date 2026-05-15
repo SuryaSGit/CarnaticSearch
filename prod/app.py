@@ -31,8 +31,22 @@ for _rec in search.metadata:
     if _key in _seen:
         continue
     _seen.add(_key)
-    _UNIQUE_SONGS.append({"song": _key[0], "composer": _key[1]})
+    _UNIQUE_SONGS.append({
+        "song": _key[0],
+        "composer": _key[1],
+        "raagam": _rec.get("Raagam", ""),
+    })
 del _seen
+
+_COMPOSERS = sorted({s["composer"] for s in _UNIQUE_SONGS if s["composer"]})
+_RAAGAMS   = sorted({s["raagam"]   for s in _UNIQUE_SONGS if s["raagam"]})
+_BY_COMPOSER: dict = {}
+_BY_RAAGAM:   dict = {}
+for _s in _UNIQUE_SONGS:
+    if _s["composer"]:
+        _BY_COMPOSER.setdefault(_s["composer"], []).append(_s)
+    if _s["raagam"]:
+        _BY_RAAGAM.setdefault(_s["raagam"], []).append(_s)
 
 
 class SearchRequest(BaseModel):
@@ -159,10 +173,50 @@ def songs(q: str = "", limit: int = 10):
     out = []
     for rec in _UNIQUE_SONGS:
         if q_lower in rec["song"].lower() or q_lower in rec["composer"].lower():
-            out.append(rec)
+            out.append({"song": rec["song"], "composer": rec["composer"]})
             if len(out) >= limit:
                 break
     return out
+
+
+@app.get("/composers")
+def composers(q: str = "", limit: int = 20):
+    q_lower = q.strip().lower()
+    if not q_lower:
+        return [{"name": c, "song_count": len(_BY_COMPOSER[c])} for c in _COMPOSERS[:limit]]
+    out = []
+    for c in _COMPOSERS:
+        if q_lower in c.lower():
+            out.append({"name": c, "song_count": len(_BY_COMPOSER[c])})
+            if len(out) >= limit:
+                break
+    return out
+
+
+@app.get("/raagams")
+def raagams(q: str = "", limit: int = 20):
+    q_lower = q.strip().lower()
+    if not q_lower:
+        return [{"name": r, "song_count": len(_BY_RAAGAM[r])} for r in _RAAGAMS[:limit]]
+    out = []
+    for r in _RAAGAMS:
+        if q_lower in r.lower():
+            out.append({"name": r, "song_count": len(_BY_RAAGAM[r])})
+            if len(out) >= limit:
+                break
+    return out
+
+
+@app.get("/songs/by-composer")
+def songs_by_composer(name: str, limit: int = 200):
+    out = _BY_COMPOSER.get(name, [])
+    return [{"song": s["song"], "composer": s["composer"], "raagam": s["raagam"]} for s in out[:limit]]
+
+
+@app.get("/songs/by-raagam")
+def songs_by_raagam(name: str, limit: int = 200):
+    out = _BY_RAAGAM.get(name, [])
+    return [{"song": s["song"], "composer": s["composer"], "raagam": s["raagam"]} for s in out[:limit]]
 
 
 @app.get("/stats")

@@ -394,6 +394,126 @@ h2 {
 
 .undo-link:hover { border-bottom-style: solid; }
 
+/* Browse by composer / raagam */
+#browse-section {
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+#browse-section h3 {
+  margin: 0 0 14px;
+  font-size: 0.95rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.browse-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.browse-col {
+  position: relative;
+}
+
+.browse-col label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.browse-col input {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 0.92rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+}
+
+.browse-col input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.picker-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+  position: absolute;
+  width: 100%;
+  z-index: 5;
+}
+
+.picker-list li {
+  padding: 9px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.picker-list li:last-child { border-bottom: none; }
+.picker-list li:hover { background: var(--accent-light); }
+.picker-list .picker-name { font-size: 0.92rem; }
+.picker-list .picker-count { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+.picker-list .empty { color: var(--muted); font-style: italic; cursor: default; }
+.picker-list .empty:hover { background: var(--card); }
+
+#browse-songs-header {
+  margin-top: 16px;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+#browse-songs {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+#browse-songs li {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: border-color 0.12s, transform 0.1s;
+}
+
+#browse-songs li:hover {
+  border-color: var(--accent);
+  transform: translateX(2px);
+}
+
+#browse-songs .song-name {
+  font-weight: 500;
+  font-size: 0.94rem;
+}
+
+#browse-songs .composer {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 2px;
+}
+
+
 /* Stats */
 #stats-section {
   margin-top: 48px;

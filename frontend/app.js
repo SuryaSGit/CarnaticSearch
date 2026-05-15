@@ -414,6 +414,118 @@ els.retrainBtn.addEventListener("click", async () => {
 
 
 // -----------------------
+// Browse by composer / raagam
+// -----------------------
+const browseEls = {
+  composerInput:  $("#composer-q"),
+  composerList:   $("#composer-results"),
+  raagamInput:    $("#raagam-q"),
+  raagamList:     $("#raagam-results"),
+  songsHeader:    $("#browse-songs-header"),
+  songsList:      $("#browse-songs"),
+};
+
+let composerTimer = null;
+let raagamTimer = null;
+
+function attachPicker(input, listEl, endpoint, onSelect) {
+  // Show top-N when focused with empty input
+  input.addEventListener("focus", () => fetchPicker(input.value, listEl, endpoint, onSelect));
+
+  input.addEventListener("input", () => {
+    const timerVar = endpoint.includes("composer") ? composerTimer : raagamTimer;
+    clearTimeout(timerVar);
+    const t = setTimeout(() => fetchPicker(input.value, listEl, endpoint, onSelect), 150);
+    if (endpoint.includes("composer")) composerTimer = t; else raagamTimer = t;
+  });
+
+  // Hide when clicking outside this picker
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".browse-col")) listEl.classList.add("hidden");
+  });
+}
+
+async function fetchPicker(q, listEl, endpoint, onSelect) {
+  try {
+    const r = await fetch(`${API}${endpoint}?q=${encodeURIComponent(q)}&limit=20`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const items = await r.json();
+    if (items.length === 0) {
+      listEl.innerHTML = `<li class="empty">No matches</li>`;
+    } else {
+      listEl.innerHTML = items.map((it) => `
+        <li data-name="${escapeHtml(it.name)}">
+          <span class="picker-name">${escapeHtml(it.name)}</span>
+          <span class="picker-count">${it.song_count} songs</span>
+        </li>`).join("");
+      listEl.querySelectorAll("li[data-name]").forEach((li) => {
+        li.addEventListener("click", () => {
+          const name = li.getAttribute("data-name");
+          listEl.classList.add("hidden");
+          onSelect(name);
+        });
+      });
+    }
+    listEl.classList.remove("hidden");
+  } catch (err) {
+    listEl.innerHTML = `<li class="empty">Lookup failed</li>`;
+    listEl.classList.remove("hidden");
+  }
+}
+
+attachPicker(browseEls.composerInput, browseEls.composerList, "/composers", (name) => {
+  browseEls.composerInput.value = name;
+  browseEls.raagamInput.value = "";
+  loadSongsForFilter("composer", name);
+});
+
+attachPicker(browseEls.raagamInput, browseEls.raagamList, "/raagams", (name) => {
+  browseEls.raagamInput.value = name;
+  browseEls.composerInput.value = "";
+  loadSongsForFilter("raagam", name);
+});
+
+
+async function loadSongsForFilter(kind, name) {
+  const endpoint = kind === "composer" ? "/songs/by-composer" : "/songs/by-raagam";
+  try {
+    const r = await fetch(`${API}${endpoint}?name=${encodeURIComponent(name)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const songs = await r.json();
+    browseEls.songsHeader.innerHTML =
+      `<strong>${songs.length}</strong> song${songs.length === 1 ? "" : "s"} ` +
+      `${kind === "composer" ? "by" : "in raagam"} ` +
+      `<em>${escapeHtml(name)}</em>`;
+    browseEls.songsHeader.classList.remove("hidden");
+
+    browseEls.songsList.innerHTML = songs.map((s) => {
+      const meta = kind === "composer"
+        ? `Raagam: ${escapeHtml(s.raagam || "—")}`
+        : `Composer: ${escapeHtml(s.composer || "—")}`;
+      return `
+        <li data-song="${escapeHtml(s.song)}" data-composer="${escapeHtml(s.composer)}">
+          <div class="song-info">
+            <div class="song-name">${escapeHtml(s.song)}</div>
+            <div class="composer">${meta}</div>
+          </div>
+        </li>`;
+    }).join("");
+    browseEls.songsList.classList.remove("hidden");
+    browseEls.songsList.querySelectorAll("li[data-song]").forEach((li) => {
+      li.addEventListener("click", () => openKarnatik({
+        song: li.getAttribute("data-song"),
+        composer: li.getAttribute("data-composer"),
+      }));
+    });
+  } catch (err) {
+    browseEls.songsHeader.textContent = `Failed to load songs: ${err.message}`;
+    browseEls.songsHeader.classList.remove("hidden");
+    browseEls.songsList.classList.add("hidden");
+  }
+}
+
+
+// -----------------------
 // Utilities
 // -----------------------
 function escapeHtml(str) {

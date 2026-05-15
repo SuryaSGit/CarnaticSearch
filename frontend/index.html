@@ -67,6 +67,24 @@
       </div>
     </section>
 
+    <section id="browse-section">
+      <h3>Browse by composer or raagam</h3>
+      <div class="browse-grid">
+        <div class="browse-col">
+          <label for="composer-q">Composer</label>
+          <input id="composer-q" type="text" placeholder="e.g. Tyaagaraaja" autocomplete="off" />
+          <ul id="composer-results" class="picker-list hidden"></ul>
+        </div>
+        <div class="browse-col">
+          <label for="raagam-q">Raagam</label>
+          <input id="raagam-q" type="text" placeholder="e.g. kalyANi" autocomplete="off" />
+          <ul id="raagam-results" class="picker-list hidden"></ul>
+        </div>
+      </div>
+      <div id="browse-songs-header" class="hidden"></div>
+      <ul id="browse-songs" class="hidden"></ul>
+    </section>
+
     <section id="stats-section">
       <div class="stats-header">
         <h3>Live stats</h3>
