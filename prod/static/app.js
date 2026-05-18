@@ -6,6 +6,8 @@ const els = {
   form:           $("#search-form"),
   query:          $("#query"),
   searchBtn:      $("#search-btn"),
+  audioUpload:    $("#audio-upload"),
+  uploadStatus:   $("#upload-status"),
   results:        $("#results"),
   topPick:        $("#top-pick"),
   shortlist:      $("#shortlist"),
@@ -170,6 +172,41 @@ function karnatikUrl(song) {
   const q = `karnatik.com ${song.song} ${song.composer}`;
   return `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 }
+
+
+// -----------------------
+// Audio upload → transcribe → search
+// -----------------------
+els.audioUpload.addEventListener("change", async () => {
+  const file = els.audioUpload.files && els.audioUpload.files[0];
+  if (!file) return;
+
+  els.uploadStatus.classList.remove("error");
+  els.uploadStatus.textContent = `Transcribing ${file.name} … (first request may take ~30s while the model loads)`;
+
+  const fd = new FormData();
+  fd.append("file", file);
+
+  try {
+    const r = await fetch(`${API}/transcribe`, { method: "POST", body: fd });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (!data.text || !data.text.trim()) {
+      throw new Error("transcription was empty");
+    }
+    els.query.value = data.text.trim();
+    els.uploadStatus.textContent =
+      `Transcribed (${data.language}, ${data.duration}s). Searching…`;
+    // Trigger the same code path as a manual submit
+    els.form.dispatchEvent(new Event("submit", { cancelable: true }));
+  } catch (err) {
+    els.uploadStatus.textContent = `Transcription failed: ${err.message}`;
+    els.uploadStatus.classList.add("error");
+  } finally {
+    // Allow re-uploading the same file
+    els.audioUpload.value = "";
+  }
+});
 
 
 function openKarnatik(song) {

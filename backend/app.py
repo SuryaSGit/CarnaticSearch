@@ -17,7 +17,9 @@ import os
 import sys
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+import tempfile
+
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -251,6 +253,50 @@ def songs_by_composer(name: str, limit: int = 200):
 def songs_by_raagam(name: str, limit: int = 200):
     out = _BY_RAAGAM.get(name, [])
     return [{"song": s["song"], "composer": s["composer"], "raagam": s["raagam"]} for s in out[:limit]]
+
+
+_whisper_model = None
+WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")  # tiny|base|small|medium|large-v3
+
+
+def _get_whisper():
+    """Lazy-load the Whisper model the first time it's needed."""
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel(WHISPER_MODEL_NAME, device="cpu", compute_type="int8")
+    return _whisper_model
+
+
+@app.post("/transcribe")
+async def transcribe(file: UploadFile = File(...)):
+    """Transcribe an uploaded audio file (mp3/wav/m4a/etc.) to text via
+    faster-whisper, then return the transcript so the frontend can drop
+    it into the search box."""
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Empty upload")
+
+    suffix = os.path.splitext(file.filename or "")[1] or ".mp3"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+
+    try:
+        model = _get_whisper()
+        segments, info = model.transcribe(tmp_path, beam_size=5)
+        text = " ".join(s.text.strip() for s in segments).strip()
+        return {
+            "text": text,
+            "language": info.language,
+            "language_probability": round(info.language_probability, 3),
+            "duration": round(info.duration, 1),
+        }
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 @app.get("/stats")

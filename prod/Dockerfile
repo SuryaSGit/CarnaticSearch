@@ -1,8 +1,9 @@
 FROM python:3.11-slim
 
-# libgomp1 is required by lightgbm at import time
+# libgomp1 for lightgbm; ffmpeg for faster-whisper audio decoding
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
+        ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # HF Spaces requires running as a non-root user

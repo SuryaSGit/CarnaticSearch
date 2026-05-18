@@ -33,6 +33,13 @@
         />
         <button type="submit" id="search-btn">Search</button>
       </form>
+      <div class="upload-row">
+        <label for="audio-upload" class="upload-btn">
+          🎵 Upload audio to transcribe
+          <input id="audio-upload" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac" hidden />
+        </label>
+        <span id="upload-status"></span>
+      </div>
     </section>
 
     <section id="results" class="hidden">
