@@ -78,11 +78,18 @@ def tokenize(text: str, expand_splits: bool = False) -> list:
         tokens.append(f"{words[i]}{words[i + 1]}")
 
     if expand_splits:
+        # Emit splits as UNDERSCORED PAIRS, not standalone halves. This
+        # matches doc bigram tokens (`muni_manasa` for a doc containing the
+        # adjacent words `muni manasa`) so a query word like `munimanasa`
+        # finds the spaced occurrence. We deliberately do NOT emit the
+        # halves on their own — that caused false matches when a split
+        # happened to coincide with a real (rare) word in unrelated songs,
+        # e.g. `mullunella` splitting to `mullu` and matching the Kannada
+        # 'thorn' kriti muLLu koneya.
         for word in words:
             if len(word) > 5:
                 for i in range(3, len(word) - 2):
-                    tokens.append(word[:i])
-                    tokens.append(word[i:])
+                    tokens.append(f"{word[:i]}_{word[i:]}")
 
     return tokens
 

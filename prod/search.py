@@ -82,11 +82,13 @@ def tokenize(text: str, expand_splits: bool = False) -> list:
         tokens.append(f"{words[i]}{words[i + 1]}")
 
     if expand_splits:
+        # Emit splits as underscored pairs (matches doc adjacent-word bigrams)
+        # NOT as standalone halves — those caused false matches when a split
+        # coincided with an unrelated rare word in the corpus.
         for word in words:
             if len(word) > 5:
                 for i in range(3, len(word) - 2):
-                    tokens.append(word[:i])
-                    tokens.append(word[i:])
+                    tokens.append(f"{word[:i]}_{word[i:]}")
 
     return tokens
 
