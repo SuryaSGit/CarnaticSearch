@@ -122,6 +122,16 @@ _SONG_TO_CHUNKS: dict = {}
 for _i, _rec in enumerate(metadata):
     _SONG_TO_CHUNKS.setdefault(_rec["Song Name"], []).append(_i)
 
+# Song name -> full normalized lyrics. Used for cross-chunk phrase matching
+# (BM25 indexes per chunk, so a phrase that straddles two chunks is invisible
+# to BM25 alone). At search time we scan this dict for exact substring matches
+# and pin those songs into the candidate set.
+_SONG_NORM_LYRICS: dict = {}
+for _rec in metadata:
+    _sn = _rec["Song Name"]
+    if _sn not in _SONG_NORM_LYRICS:
+        _SONG_NORM_LYRICS[_sn] = normalize(_rec.get("Lyrics", ""))
+
 
 # -----------------------
 # Stage 1: BM25 → top_k
@@ -151,8 +161,15 @@ def search_bm25(query: str, top_k: int = 20, pin_songs: set = None) -> list:
         if key in seen:
             continue
 
+        # Phrase bonus has two tiers:
+        # - chunk-level (+5): query appears verbatim in this chunk's words
+        # - full-lyric (+50): query appears verbatim anywhere in the song's
+        #   full normalized lyrics. Catches phrases that straddle the 10-word
+        #   chunk boundary (which would otherwise hide an exact match).
         doc_text = " ".join(w for w in docs[idx] if '_' not in w and len(w) > 4)
         phrase_bonus = 5 if norm_q in doc_text else 0
+        if len(norm_q.split()) >= 2 and norm_q in normalize(song["Lyrics"]):
+            phrase_bonus = max(phrase_bonus, 50)
         score = float(scores[idx]) + phrase_bonus
 
         seen.add(key)
@@ -178,11 +195,17 @@ def search_bm25(query: str, top_k: int = 20, pin_songs: set = None) -> list:
                 continue
             best_idx = max(chunk_idxs, key=lambda i: scores[i])
             song_rec = metadata[best_idx]
+            score = float(scores[best_idx])
+            # Same full-lyric phrase bonus as the top-20 loop — pinned songs
+            # from _songs_with_exact_phrase already match by construction, so
+            # this lifts them appropriately.
+            if len(norm_q.split()) >= 2 and norm_q in normalize(song_rec.get("Lyrics", "")):
+                score += 50
             results.append({
                 "song": song_rec["Song Name"],
                 "composer": song_rec["Composer"],
                 "lyrics": song_rec["Lyrics"],
-                "score": float(scores[best_idx]),
+                "score": score,
             })
 
     results.sort(key=lambda x: x["score"], reverse=True)
@@ -452,9 +475,18 @@ def _songs_with_picks(norm_q: str, qs_counts: dict) -> set:
     return out
 
 
+def _songs_with_exact_phrase(norm_q: str) -> set:
+    """Songs whose FULL normalized lyrics contain the query as a substring.
+    Empty for single-word queries (too noisy)."""
+    if len(norm_q.split()) < 2:
+        return set()
+    return {sn for sn, nl in _SONG_NORM_LYRICS.items() if norm_q in nl}
+
+
 def search(query: str, shortlist_size: int = 5):
+    norm_q = normalize(query)
     qs_counts = _load_query_song_counts()
-    pinned = _songs_with_picks(normalize(query), qs_counts)
+    pinned = _songs_with_picks(norm_q, qs_counts) | _songs_with_exact_phrase(norm_q)
     candidates = search_bm25(query, top_k=20, pin_songs=pinned)
     best, ranked = ml_rank(query, candidates)
     return best, ranked[:shortlist_size]
