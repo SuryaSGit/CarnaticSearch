@@ -105,11 +105,21 @@ STRIDE = 5
 for song in data:
     text = f"{song['Song Name']} {song['Composer']} {song['Lyrics']}"
     words = normalize(text).split()
+    last_chunk_end = 0
     for i in range(0, max(1, len(words) - WINDOW + 1), STRIDE):
         chunk_words = words[i:i + WINDOW]
         if len(chunk_words) < 5:
             continue
         docs.append(tokenize(" ".join(chunk_words)))
+        metadata.append(song)
+        last_chunk_end = i + len(chunk_words)
+
+    # Tail chunk so the end of every song's lyrics is indexed (otherwise
+    # the upper bound `len(words) - WINDOW + 1` truncates the tail when
+    # the word count isn't STRIDE-aligned).
+    if last_chunk_end < len(words) and len(words) >= 5:
+        tail_start = max(0, len(words) - WINDOW)
+        docs.append(tokenize(" ".join(words[tail_start:])))
         metadata.append(song)
 
 bm25 = BM25Okapi(docs)

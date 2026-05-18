@@ -106,11 +106,22 @@ for song in data:
     norm = normalize(text)
     words = norm.split()
 
+    last_chunk_end = 0
     for i in range(0, max(1, len(words) - WINDOW + 1), STRIDE):
         chunk_words = words[i:i + WINDOW]
         if len(chunk_words) < 5:
             continue
         docs.append(tokenize(" ".join(chunk_words)))
+        metadata.append(song)
+        last_chunk_end = i + len(chunk_words)
+
+    # Tail chunk: striding's upper bound `len(words) - WINDOW + 1` truncates
+    # the last few words when len(words) isn't aligned with STRIDE. Without
+    # this fixup, the END of a song's lyrics may never enter the index — and
+    # if the user's query happens to live there, BM25 returns nothing for it.
+    if last_chunk_end < len(words) and len(words) >= 5:
+        tail_start = max(0, len(words) - WINDOW)
+        docs.append(tokenize(" ".join(words[tail_start:])))
         metadata.append(song)
 
 bm25 = BM25Okapi(docs)
