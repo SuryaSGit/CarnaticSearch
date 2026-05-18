@@ -197,11 +197,47 @@ button:disabled { opacity: 0.5; cursor: wait; }
   margin: 0 0 12px;
 }
 
-#top-pick .lyrics-preview {
+#top-pick .lyrics-preview,
+#shortlist .lyrics-preview {
   font-size: 0.9rem;
   color: #444;
   font-style: italic;
-  line-height: 1.4;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow-y: auto;
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: #fafafa;
+  border-radius: 6px;
+  border-left: 3px solid var(--accent-light);
+}
+
+mark {
+  background: #ffe8b3;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: 600;
+  font-style: normal;
+}
+
+.karnatik-link {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent);
+}
+
+.karnatik-link:hover { border-bottom-style: solid; }
+
+#shortlist li.collapsed .expanded-body { display: none; }
+#shortlist li .expanded-body { margin-top: 8px; }
+#shortlist li:not(.collapsed) {
+  align-items: flex-start;
 }
 
 h2 {

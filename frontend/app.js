@@ -57,47 +57,118 @@ els.form.addEventListener("submit", async (e) => {
 });
 
 
-function renderResults({ top_pick, shortlist }) {
+function renderResults({ query, top_pick, shortlist }) {
   els.results.classList.remove("hidden");
   els.feedbackSec.classList.remove("hidden");
   els.notInList.open = false;
   els.correctSong.value = "";
   els.typeaheadList.classList.add("hidden");
 
-  // Top pick
+  // Top pick — full lyrics with highlights (we no longer truncate)
   els.topPick.innerHTML = `
     <div class="label">Top pick</div>
     <div class="song-info">
       <h2 class="song-name">${escapeHtml(top_pick.song)}</h2>
       <p class="composer">${escapeHtml(top_pick.composer)}</p>
-      <p class="lyrics-preview">${escapeHtml(truncate(top_pick.lyrics, 240))}</p>
+      <div class="lyrics-preview">${highlightLyrics(top_pick.lyrics, query)}</div>
+      <a class="karnatik-link" href="${karnatikUrl(top_pick)}" target="_blank"
+         rel="noopener noreferrer">Look up on karnatik.com →</a>
     </div>
     <button class="confirm-btn" type="button">✓ This is my song</button>
   `;
-  els.topPick.onclick = () => openKarnatik(top_pick);
+  // Keep clicking the card body opening karnatik (preserves prior behavior),
+  // but don't trigger it from inside the lyrics or the karnatik link itself.
+  els.topPick.querySelector(".karnatik-link").onclick = (e) => e.stopPropagation();
+  els.topPick.onclick = (e) => {
+    if (e.target.closest(".confirm-btn") || e.target.closest("a") ||
+        e.target.closest(".lyrics-preview")) return;
+    openKarnatik(top_pick);
+  };
   els.topPick.querySelector(".confirm-btn").onclick = (e) => {
     e.stopPropagation();
     selectAnswer(top_pick.song, els.topPick);
   };
 
-  // Shortlist
+  // Shortlist — collapsed by default. Click to expand and show lyrics +
+  // highlights inline (no longer opens karnatik on click — karnatik link
+  // appears in the expanded view).
   els.shortlist.innerHTML = "";
   shortlist.forEach((s) => {
     const li = document.createElement("li");
+    li.classList.add("collapsed");
     li.innerHTML = `
       <div class="song-info">
         <div class="song-name">${escapeHtml(s.song)}</div>
         <div class="composer">${escapeHtml(s.composer)}</div>
+        <div class="expanded-body hidden">
+          <div class="lyrics-preview">${highlightLyrics(s.lyrics, query)}</div>
+          <a class="karnatik-link" href="${karnatikUrl(s)}" target="_blank"
+             rel="noopener noreferrer">Look up on karnatik.com →</a>
+        </div>
       </div>
       <button class="confirm-btn" type="button">✓ This is my song</button>
     `;
-    li.onclick = () => openKarnatik(s);
+    const body = li.querySelector(".expanded-body");
+    li.onclick = (e) => {
+      if (e.target.closest(".confirm-btn") || e.target.closest("a")) return;
+      const wasCollapsed = li.classList.toggle("collapsed");
+      body.classList.toggle("hidden", wasCollapsed);
+    };
+    // Start collapsed
+    li.classList.add("collapsed");
+    body.classList.add("hidden");
     li.querySelector(".confirm-btn").onclick = (e) => {
       e.stopPropagation();
       selectAnswer(s.song, li);
     };
     els.shortlist.appendChild(li);
   });
+}
+
+
+// -----------------------
+// Lyric highlighting
+// -----------------------
+// Mirror the backend normalize() rules so highlight word-matching lines up
+// with what BM25 actually searched against.
+function normalizeJS(text) {
+  let s = (text || "").toLowerCase();
+  s = s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
+  const repls = [
+    ["ai", "a"], ["au", "a"],
+    ["aa", "a"], ["ee", "i"], ["ii", "i"], ["oo", "u"], ["uu", "u"],
+    ["bh", "b"], ["dh", "d"], ["gh", "g"], ["jh", "j"],
+    ["kh", "k"], ["ph", "p"], ["th", "t"],
+    ["sh", "s"],
+    ["w", "v"],
+  ];
+  for (const [a, b] of repls) s = s.split(a).join(b);
+  return s.replace(/[^a-z\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+
+function highlightLyrics(lyrics, query) {
+  if (!lyrics) return "";
+  const queryWords = new Set(
+    normalizeJS(query).split(/\s+/).filter(w => w.length >= 3),
+  );
+  if (queryWords.size === 0) return escapeHtml(lyrics);
+  // Split keeping the separators (spaces/newlines/punct) so we can preserve formatting.
+  const parts = lyrics.split(/(\b)/);
+  return parts.map(part => {
+    if (!part) return "";
+    // Token boundaries from \b are zero-width; we get actual word chunks and separators.
+    if (queryWords.has(normalizeJS(part))) {
+      return `<mark>${escapeHtml(part)}</mark>`;
+    }
+    return escapeHtml(part);
+  }).join("");
+}
+
+
+function karnatikUrl(song) {
+  const q = `karnatik.com ${song.song} ${song.composer}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 }
 
 
