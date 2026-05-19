@@ -13,17 +13,30 @@ Run:
 """
 
 import json
+import logging
 import os
 import sys
+import time
 from typing import Optional
 
 import tempfile
 import subprocess
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+# -----------------------
+# Logging
+# -----------------------
+LOG_LEVEL = os.environ.get("CARNATIC_LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("carnatic")
 
 # Make the searcher importable
 ROOT = os.path.join(os.path.dirname(__file__), '..')
@@ -73,6 +86,29 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def access_log(request: Request, call_next):
+    """One INFO line per request with method, path, status, and duration.
+    On unhandled exceptions, log the traceback with the path so we can tie
+    errors back to the offending request."""
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        log.exception("%s %s -> 500 (%.0fms) UNHANDLED", request.method, request.url.path, elapsed_ms)
+        raise
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    # Quiet down per-request noise for static frontend / poll endpoints
+    quiet = request.url.path in {"/style.css", "/app.js", "/stats", "/"} \
+            or request.url.path.startswith("/composers") \
+            or request.url.path.startswith("/raagams") \
+            or request.url.path.startswith("/songs")
+    level = logging.DEBUG if quiet else logging.INFO
+    log.log(level, "%s %s -> %d (%.0fms)", request.method, request.url.path, response.status_code, elapsed_ms)
+    return response
+
+
 # -----------------------
 # Schemas
 # -----------------------
@@ -110,6 +146,8 @@ def search(req: SearchRequest):
         raise HTTPException(status_code=400, detail="Empty query")
 
     best, shortlist = searcher.search(req.query, shortlist_size=req.shortlist_size)
+    log.info("search q=%r top=%r shortlist=%d",
+             req.query, best["song"], len(shortlist))
     return SearchResponse(
         query=req.query,
         top_pick=SongResult(**best),
@@ -144,11 +182,13 @@ def feedback(req: FeedbackRequest):
     # into the candidate list so the entry has a positive label and retrain can
     # use it. Look up the song's actual BM25 score by re-running BM25 over the
     # query — gives the ranker a realistic feature value rather than a dummy.
+    inject_path = "shortlist"
     if not any(_norm_song(s.get("song", "")) == correct_norm for s in candidates):
         bm25_top = searcher.search_bm25(req.query, top_k=40)
         match = next((c for c in bm25_top if _norm_song(c["song"]) == correct_norm), None)
         if match is not None:
             candidates.append(match)
+            inject_path = "bm25-top-40"
         else:
             # Not in BM25 top 40: still trainable, but pull the real lyrics
             # from the corpus so feature extraction has meaningful values.
@@ -156,6 +196,7 @@ def feedback(req: FeedbackRequest):
             if stub is None:
                 stub = {"song": req.correct_song, "composer": "", "lyrics": "", "score": 0.0}
             candidates.append(stub)
+            inject_path = "corpus-stub" if _lookup_song(req.correct_song) else "missing-stub"
 
     labels = [
         1 if _norm_song(s.get("song", "")) == correct_norm else 0
@@ -172,6 +213,8 @@ def feedback(req: FeedbackRequest):
     }
     with open(FEEDBACK_LOG, "a") as f:
         f.write(json.dumps(entry) + "\n")
+    log.info("feedback q=%r correct=%r path=%s ml_correct=%s",
+             req.query, req.correct_song, inject_path, entry["ml_correct"])
     return {"ok": True, **{k: entry[k] for k in ("ml_correct", "correct_in_shortlist")}}
 
 
@@ -190,12 +233,15 @@ def revoke_feedback(req: RevokeRequest):
     }
     with open(FEEDBACK_LOG, "a") as f:
         f.write(json.dumps(entry) + "\n")
+    log.info("revoke q=%r song=%r", req.query, req.correct_song)
     return {"ok": True}
 
 
 @app.post("/retrain")
 def retrain():
+    start = time.perf_counter()
     ranker = searcher.retrain(min_samples=1)
+    log.info("retrain trained=%s (%.0fms)", ranker is not None, (time.perf_counter() - start) * 1000)
     return {"trained": ranker is not None}
 
 
@@ -284,8 +330,12 @@ def _get_whisper():
     """Lazy-load the Whisper model the first time it's needed."""
     global _whisper_model
     if _whisper_model is None:
+        log.info("whisper loading model=%s (first call, this can take ~30s on cold start)",
+                 WHISPER_MODEL_NAME)
+        t = time.perf_counter()
         from faster_whisper import WhisperModel
         _whisper_model = WhisperModel(WHISPER_MODEL_NAME, device="cpu", compute_type="int8")
+        log.info("whisper loaded model=%s in %.1fs", WHISPER_MODEL_NAME, time.perf_counter() - t)
     return _whisper_model
 
 
@@ -296,9 +346,13 @@ async def transcribe(file: UploadFile = File(...)):
     it into the search box."""
     contents = await file.read()
     if not contents:
+        log.warning("transcribe rejected: empty upload (filename=%r)", file.filename)
         raise HTTPException(status_code=400, detail="Empty upload")
 
     suffix = os.path.splitext(file.filename or "")[1] or ".mp3"
+    upload_kb = len(contents) // 1024
+    log.info("transcribe begin filename=%r suffix=%s size=%dKB", file.filename, suffix, upload_kb)
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_in:
         tmp_in.write(contents)
         tmp_in_path = tmp_in.name
@@ -308,25 +362,51 @@ async def transcribe(file: UploadFile = File(...)):
     # resampling/decoding either.
     tmp_out_path = tmp_in_path + ".clipped.wav"
     try:
-        subprocess.run(
-            [
-                "ffmpeg", "-y", "-loglevel", "error",
-                "-i", tmp_in_path,
-                "-t", str(MAX_AUDIO_SECONDS),
-                "-ar", "16000", "-ac", "1",
-                "-c:a", "pcm_s16le",
+        t_clip = time.perf_counter()
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-loglevel", "error",
+                    "-i", tmp_in_path,
+                    "-t", str(MAX_AUDIO_SECONDS),
+                    "-ar", "16000", "-ac", "1",
+                    "-c:a", "pcm_s16le",
+                    tmp_out_path,
+                ],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or b"").decode(errors="replace")[:300]
+            log.error("transcribe ffmpeg failed: rc=%d stderr=%s", e.returncode, stderr)
+            raise HTTPException(status_code=400, detail=f"Audio decode failed: {stderr}")
+        log.info("transcribe ffmpeg clipped to %ds in %.2fs (out=%dKB)",
+                 MAX_AUDIO_SECONDS, time.perf_counter() - t_clip,
+                 os.path.getsize(tmp_out_path) // 1024)
+
+        try:
+            model = _get_whisper()
+        except Exception:
+            log.exception("transcribe whisper model load failed")
+            raise HTTPException(status_code=500, detail="Whisper model load failed (check server logs)")
+
+        t_transcribe = time.perf_counter()
+        try:
+            segments, info = model.transcribe(
                 tmp_out_path,
-            ],
-            check=True,
-        )
-        model = _get_whisper()
-        segments, info = model.transcribe(
-            tmp_out_path,
-            beam_size=5,
-            language=WHISPER_LANGUAGE,
-            initial_prompt=WHISPER_PROMPT,
-        )
-        text = " ".join(s.text.strip() for s in segments).strip()
+                beam_size=5,
+                language=WHISPER_LANGUAGE,
+                initial_prompt=WHISPER_PROMPT,
+            )
+            text = " ".join(s.text.strip() for s in segments).strip()
+        except Exception:
+            log.exception("transcribe whisper.transcribe failed")
+            raise HTTPException(status_code=500, detail="Whisper transcription failed (check server logs)")
+
+        elapsed = time.perf_counter() - t_transcribe
+        log.info("transcribe done lang=%s prob=%.2f dur=%.1fs took=%.1fs text_len=%d preview=%r",
+                 info.language, info.language_probability, info.duration, elapsed,
+                 len(text), text[:80])
         return {
             "text": text,
             "language": info.language,
@@ -334,8 +414,6 @@ async def transcribe(file: UploadFile = File(...)):
             "duration": round(info.duration, 1),
             "clipped_to_seconds": MAX_AUDIO_SECONDS,
         }
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=400, detail=f"Audio decode failed: {e}")
     finally:
         for p in (tmp_in_path, tmp_out_path):
             try:
