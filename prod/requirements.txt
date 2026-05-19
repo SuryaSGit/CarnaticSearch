@@ -7,3 +7,7 @@ lightgbm==4.5.0
 scikit-learn==1.5.2
 numpy==1.26.4
 faster-whisper==1.0.3
+# faster-whisper imports `requests` at module load but doesn't list it
+# as a hard dependency, so install it explicitly.
+requests==2.32.3
+huggingface_hub==0.25.2
