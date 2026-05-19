@@ -18,6 +18,7 @@ import sys
 from typing import Optional
 
 import tempfile
+import subprocess
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -260,6 +261,9 @@ WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")  # tiny|base|small
 # Force the transcription to come out in English/Latin letters so it matches
 # the English-transliterated lyrics in the corpus.
 WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "en")
+# Cap audio length so transcription completes inside HF Space's edge timeout
+# (~60s for free tier). 30s is more than enough to identify lyrics for search.
+MAX_AUDIO_SECONDS = int(os.environ.get("WHISPER_MAX_SECONDS", "30"))
 # Biases the model toward Carnatic-style transliteration: deity names,
 # composer/kriti title fragments, and common Sanskrit/Telugu lyric words.
 # Whisper consumes initial_prompt as conversational context but does NOT
@@ -295,14 +299,29 @@ async def transcribe(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Empty upload")
 
     suffix = os.path.splitext(file.filename or "")[1] or ".mp3"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(contents)
-        tmp_path = tmp.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_in:
+        tmp_in.write(contents)
+        tmp_in_path = tmp_in.name
 
+    # Truncate via ffmpeg to bound transcription time. Output is 16kHz mono
+    # WAV (Whisper's native format) so model.transcribe spends zero time on
+    # resampling/decoding either.
+    tmp_out_path = tmp_in_path + ".clipped.wav"
     try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-i", tmp_in_path,
+                "-t", str(MAX_AUDIO_SECONDS),
+                "-ar", "16000", "-ac", "1",
+                "-c:a", "pcm_s16le",
+                tmp_out_path,
+            ],
+            check=True,
+        )
         model = _get_whisper()
         segments, info = model.transcribe(
-            tmp_path,
+            tmp_out_path,
             beam_size=5,
             language=WHISPER_LANGUAGE,
             initial_prompt=WHISPER_PROMPT,
@@ -313,12 +332,16 @@ async def transcribe(file: UploadFile = File(...)):
             "language": info.language,
             "language_probability": round(info.language_probability, 3),
             "duration": round(info.duration, 1),
+            "clipped_to_seconds": MAX_AUDIO_SECONDS,
         }
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=400, detail=f"Audio decode failed: {e}")
     finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        for p in (tmp_in_path, tmp_out_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 
 @app.get("/stats")

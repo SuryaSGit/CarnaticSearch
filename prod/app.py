@@ -3,6 +3,7 @@
 import os
 import json
 import tempfile
+import subprocess
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -225,6 +226,9 @@ WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")  # tiny|base|small
 # Force English/Latin output so transcripts match the English-transliterated
 # corpus; without this, Whisper outputs native script (Telugu/Tamil/etc.).
 WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "en")
+# Cap audio length so transcription completes inside HF Space's edge timeout
+# (~60s on free tier). 30s is enough to identify lyrics for search.
+MAX_AUDIO_SECONDS = int(os.environ.get("WHISPER_MAX_SECONDS", "30"))
 # Carnatic vocabulary primer for Whisper — biases the model toward the
 # kind of transliterated word-shapes our corpus uses.
 WHISPER_PROMPT = (
@@ -256,14 +260,26 @@ async def transcribe(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Empty upload")
 
     suffix = os.path.splitext(file.filename or "")[1] or ".mp3"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(contents)
-        tmp_path = tmp.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_in:
+        tmp_in.write(contents)
+        tmp_in_path = tmp_in.name
 
+    tmp_out_path = tmp_in_path + ".clipped.wav"
     try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-i", tmp_in_path,
+                "-t", str(MAX_AUDIO_SECONDS),
+                "-ar", "16000", "-ac", "1",
+                "-c:a", "pcm_s16le",
+                tmp_out_path,
+            ],
+            check=True,
+        )
         model = _get_whisper()
         segments, info = model.transcribe(
-            tmp_path,
+            tmp_out_path,
             beam_size=5,
             language=WHISPER_LANGUAGE,
             initial_prompt=WHISPER_PROMPT,
@@ -274,12 +290,16 @@ async def transcribe(file: UploadFile = File(...)):
             "language": info.language,
             "language_probability": round(info.language_probability, 3),
             "duration": round(info.duration, 1),
+            "clipped_to_seconds": MAX_AUDIO_SECONDS,
         }
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=400, detail=f"Audio decode failed: {e}")
     finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        for p in (tmp_in_path, tmp_out_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 
 @app.get("/stats")

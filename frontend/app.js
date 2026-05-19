@@ -182,7 +182,7 @@ els.audioUpload.addEventListener("change", async () => {
   if (!file) return;
 
   els.uploadStatus.classList.remove("error");
-  els.uploadStatus.textContent = `Transcribing ${file.name} … (first request may take ~30s while the model loads)`;
+  els.uploadStatus.textContent = `Transcribing first 30s of ${file.name} … (first request may take ~30s while the model loads)`;
 
   const fd = new FormData();
   fd.append("file", file);
@@ -195,8 +195,9 @@ els.audioUpload.addEventListener("change", async () => {
       throw new Error("transcription was empty");
     }
     els.query.value = data.text.trim();
+    const snippet = data.clipped_to_seconds ? ` first ${data.clipped_to_seconds}s` : "";
     els.uploadStatus.textContent =
-      `Transcribed (${data.language}, ${data.duration}s). Searching…`;
+      `Transcribed${snippet} (${data.language}). Searching…`;
     // Trigger the same code path as a manual submit
     els.form.dispatchEvent(new Event("submit", { cancelable: true }));
   } catch (err) {
