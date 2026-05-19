@@ -225,6 +225,18 @@ WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")  # tiny|base|small
 # Force English/Latin output so transcripts match the English-transliterated
 # corpus; without this, Whisper outputs native script (Telugu/Tamil/etc.).
 WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "en")
+# Carnatic vocabulary primer for Whisper — biases the model toward the
+# kind of transliterated word-shapes our corpus uses.
+WHISPER_PROMPT = (
+    "vAtApi gaNapatim bhajeham, raama nannu brOvarA, manasA sancararE, "
+    "jagadAnanda kArakA, ninnE nammitinayyA, nagumOmu ganalEni, "
+    "endharO mahaanubhaavulu, jananee ninnuvina, brOva baarama, "
+    "shankari shankuru, kanaka na ruchirA, sArasAkSa pari pAlaya, "
+    "krishna rama hari govinda gopala madhava narayana shiva ganesha "
+    "lakshmi parvati saraswati durga ambika kAli; "
+    "tyagaraja dikshitar shyama shastri muttuswamy "
+    "namostute namami namaha jaya vande prabho deva swami pAhi"
+)
 
 
 def _get_whisper():
@@ -253,7 +265,8 @@ async def transcribe(file: UploadFile = File(...)):
         segments, info = model.transcribe(
             tmp_path,
             beam_size=5,
-            language=WHISPER_LANGUAGE,  # English transliteration, not native script
+            language=WHISPER_LANGUAGE,
+            initial_prompt=WHISPER_PROMPT,
         )
         text = " ".join(s.text.strip() for s in segments).strip()
         return {

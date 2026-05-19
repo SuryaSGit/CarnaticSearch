@@ -258,10 +258,22 @@ def songs_by_raagam(name: str, limit: int = 200):
 _whisper_model = None
 WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")  # tiny|base|small|medium|large-v3
 # Force the transcription to come out in English/Latin letters so it matches
-# the English-transliterated lyrics in the corpus. Without this, Whisper
-# auto-detects and outputs native script (Devanagari for Sanskrit, Tamil for
-# Tamil, etc.) which our BM25 normalize() can't match.
+# the English-transliterated lyrics in the corpus.
 WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "en")
+# Biases the model toward Carnatic-style transliteration: deity names,
+# composer/kriti title fragments, and common Sanskrit/Telugu lyric words.
+# Whisper consumes initial_prompt as conversational context but does NOT
+# put it in the output — only the word *shapes* leak into its guesses.
+WHISPER_PROMPT = (
+    "vAtApi gaNapatim bhajeham, raama nannu brOvarA, manasA sancararE, "
+    "jagadAnanda kArakA, ninnE nammitinayyA, nagumOmu ganalEni, "
+    "endharO mahaanubhaavulu, jananee ninnuvina, brOva baarama, "
+    "shankari shankuru, kanaka na ruchirA, sArasAkSa pari pAlaya, "
+    "krishna rama hari govinda gopala madhava narayana shiva ganesha "
+    "lakshmi parvati saraswati durga ambika kAli; "
+    "tyagaraja dikshitar shyama shastri muttuswamy "
+    "namostute namami namaha jaya vande prabho deva swami pAhi"
+)
 
 
 def _get_whisper():
@@ -292,7 +304,8 @@ async def transcribe(file: UploadFile = File(...)):
         segments, info = model.transcribe(
             tmp_path,
             beam_size=5,
-            language=WHISPER_LANGUAGE,  # force English-letter output (transliteration)
+            language=WHISPER_LANGUAGE,
+            initial_prompt=WHISPER_PROMPT,
         )
         text = " ".join(s.text.strip() for s in segments).strip()
         return {
