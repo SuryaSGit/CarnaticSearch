@@ -222,6 +222,9 @@ def songs_by_raagam(name: str, limit: int = 200):
 
 _whisper_model = None
 WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")  # tiny|base|small|medium|large-v3
+# Force English/Latin output so transcripts match the English-transliterated
+# corpus; without this, Whisper outputs native script (Telugu/Tamil/etc.).
+WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "en")
 
 
 def _get_whisper():
@@ -247,7 +250,11 @@ async def transcribe(file: UploadFile = File(...)):
 
     try:
         model = _get_whisper()
-        segments, info = model.transcribe(tmp_path, beam_size=5)
+        segments, info = model.transcribe(
+            tmp_path,
+            beam_size=5,
+            language=WHISPER_LANGUAGE,  # English transliteration, not native script
+        )
         text = " ".join(s.text.strip() for s in segments).strip()
         return {
             "text": text,
