@@ -8,6 +8,9 @@ const els = {
   searchBtn:      $("#search-btn"),
   audioUpload:    $("#audio-upload"),
   uploadStatus:   $("#upload-status"),
+  identifyUpload: $("#identify-upload"),
+  identifyStatus: $("#identify-status"),
+  identifyResult: $("#identify-result"),
   results:        $("#results"),
   topPick:        $("#top-pick"),
   shortlist:      $("#shortlist"),
@@ -520,6 +523,98 @@ els.retrainBtn.addEventListener("click", async () => {
     els.retrainBtn.textContent = original;
   }
 });
+
+
+// -----------------------
+// Identify a song (chunked, background, polled)
+// -----------------------
+els.identifyUpload.addEventListener("change", async () => {
+  const file = els.identifyUpload.files && els.identifyUpload.files[0];
+  if (!file) return;
+
+  els.identifyStatus.classList.remove("error");
+  els.identifyStatus.textContent = `Uploading ${file.name} …`;
+  els.identifyResult.classList.add("hidden");
+  els.identifyResult.innerHTML = "";
+
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch(`${API}/identify`, { method: "POST", body: fd });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { job_id } = await r.json();
+    els.identifyStatus.textContent = `Queued (job ${job_id}). Processing …`;
+    pollIdentify(job_id);
+  } catch (err) {
+    els.identifyStatus.textContent = `Upload failed: ${err.message}`;
+    els.identifyStatus.classList.add("error");
+  } finally {
+    els.identifyUpload.value = "";
+  }
+});
+
+
+async function pollIdentify(jobId) {
+  const startedAt = Date.now();
+  const POLL_MS = 2000;
+  // Keep polling forever until status is done or error. Server may take
+  // minutes for long audio; the user sees per-chunk progress in the
+  // status line.
+  while (true) {
+    await sleep(POLL_MS);
+    try {
+      const r = await fetch(`${API}/identify/${jobId}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const job = await r.json();
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+
+      if (job.status === "queued") {
+        els.identifyStatus.textContent = `Queued… (${elapsed}s)`;
+      } else if (job.status === "processing") {
+        const p = job.progress || {};
+        els.identifyStatus.textContent =
+          `Transcribing chunks ${p.chunks_done ?? 0}/${p.chunks_total ?? "?"} — ${elapsed}s elapsed`;
+      } else if (job.status === "done") {
+        els.identifyStatus.textContent = `Identified in ${elapsed}s.`;
+        renderIdentifyResult(job.result);
+        return;
+      } else if (job.status === "error") {
+        els.identifyStatus.textContent = `Failed: ${job.error || "(unknown error)"}`;
+        els.identifyStatus.classList.add("error");
+        return;
+      }
+    } catch (err) {
+      els.identifyStatus.textContent = `Polling failed: ${err.message}`;
+      els.identifyStatus.classList.add("error");
+      return;
+    }
+  }
+}
+
+
+function renderIdentifyResult(result) {
+  if (!result || !result.top) {
+    els.identifyResult.innerHTML = `<p>No matching song found across the chunks.</p>`;
+    els.identifyResult.classList.remove("hidden");
+    return;
+  }
+  const t = result.top;
+  els.identifyResult.innerHTML = `
+    <div class="label">Identified song</div>
+    <h2 class="song-name">${escapeHtml(t.song)}</h2>
+    <p class="composer">${escapeHtml(t.composer)}</p>
+    <div class="match-badge">
+      Matched in ${result.chunks_matched} of ${result.chunks_total} chunks
+    </div>
+    <div class="lyrics-preview">${escapeHtml(truncate(t.lyrics, 400))}</div>
+    <a class="karnatik-link" href="${karnatikUrl({song: t.song, composer: t.composer})}"
+       target="_blank" rel="noopener noreferrer">Look up on karnatik.com →</a>
+  `;
+  els.identifyResult.classList.remove("hidden");
+}
+
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 
 // -----------------------

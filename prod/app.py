@@ -6,6 +6,11 @@ import logging
 import tempfile
 import subprocess
 import time
+import uuid
+import threading
+import glob
+from collections import OrderedDict
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -379,6 +384,210 @@ async def transcribe(file: UploadFile = File(...)):
                 os.unlink(p)
             except OSError:
                 pass
+
+
+# -----------------------
+# /identify — chunked audio → vote across chunks → top match
+# -----------------------
+IDENTIFY_CHUNK_SECONDS = int(os.environ.get("IDENTIFY_CHUNK_SECONDS", "15"))
+IDENTIFY_MAX_JOBS_RETAINED = 50
+
+_jobs_lock = threading.Lock()
+_jobs: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _jobs_put(job_id: str, job: dict):
+    with _jobs_lock:
+        _jobs[job_id] = job
+        while len(_jobs) > IDENTIFY_MAX_JOBS_RETAINED:
+            _jobs.popitem(last=False)
+
+
+def _jobs_get(job_id: str) -> Optional[dict]:
+    with _jobs_lock:
+        return _jobs.get(job_id)
+
+
+def _jobs_update(job_id: str, **kwargs):
+    with _jobs_lock:
+        if job_id in _jobs:
+            _jobs[job_id].update(kwargs)
+
+
+def _ffprobe_duration(path: str) -> float:
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            check=True, capture_output=True, text=True,
+        )
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        return 0.0
+
+
+def _aggregate_chunks(per_chunk: list) -> dict:
+    """Vote across per-chunk search results: most-chunk-appearances wins,
+    ties broken by rank-decayed score sum."""
+    votes: dict = {}
+    for chunk_idx, ch in enumerate(per_chunk):
+        for rank, r in enumerate(ch["shortlist"][:5]):
+            sn = r["song"]
+            if sn not in votes:
+                votes[sn] = {
+                    "song": sn,
+                    "composer": r["composer"],
+                    "lyrics": r["lyrics"],
+                    "chunks": [],
+                    "weighted_score": 0.0,
+                }
+            votes[sn]["chunks"].append(chunk_idx)
+            votes[sn]["weighted_score"] += r["score"] * (1.0 - 0.2 * rank)
+    if not votes:
+        return {"top": None, "runners_up": []}
+    ranked = sorted(votes.values(),
+                    key=lambda v: (-len(v["chunks"]), -v["weighted_score"]))
+    top = ranked[0]
+    return {
+        "top": top,
+        "runners_up": ranked[1:4],
+        "chunks_total": len(per_chunk),
+        "chunks_matched": len(top["chunks"]),
+    }
+
+
+def _run_identify(job_id: str, audio_path: str):
+    work_dir = audio_path + ".chunks"
+    try:
+        os.makedirs(work_dir, exist_ok=True)
+        duration = _ffprobe_duration(audio_path)
+        if duration <= 0:
+            _jobs_update(job_id, status="error", error="Could not read audio duration")
+            log.error("identify[%s] ffprobe failed", job_id)
+            return
+
+        chunk_pattern = os.path.join(work_dir, "chunk_%03d.wav")
+        log.info("identify[%s] splitting %.1fs audio into %ds chunks",
+                 job_id, duration, IDENTIFY_CHUNK_SECONDS)
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error",
+                 "-i", audio_path,
+                 "-f", "segment",
+                 "-segment_time", str(IDENTIFY_CHUNK_SECONDS),
+                 "-ar", "16000", "-ac", "1",
+                 "-c:a", "pcm_s16le",
+                 chunk_pattern],
+                check=True, capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or b"").decode(errors="replace")[:300]
+            log.error("identify[%s] ffmpeg segment failed: %s", job_id, stderr)
+            _jobs_update(job_id, status="error", error=f"Audio split failed: {stderr}")
+            return
+
+        chunks = sorted(glob.glob(os.path.join(work_dir, "chunk_*.wav")))
+        chunks_total = len(chunks)
+        _jobs_update(job_id, status="processing",
+                     progress={"chunks_done": 0, "chunks_total": chunks_total})
+        log.info("identify[%s] %d chunks to process", job_id, chunks_total)
+
+        try:
+            model = _get_whisper()
+        except Exception:
+            log.exception("identify[%s] whisper load failed", job_id)
+            _jobs_update(job_id, status="error", error="Whisper model load failed")
+            return
+
+        per_chunk = []
+        for idx, chunk_path in enumerate(chunks):
+            t = time.perf_counter()
+            try:
+                segments, info = model.transcribe(
+                    chunk_path,
+                    beam_size=5,
+                    language=WHISPER_LANGUAGE,
+                    initial_prompt=WHISPER_PROMPT,
+                )
+                transcript = " ".join(s.text.strip() for s in segments).strip()
+            except Exception:
+                log.exception("identify[%s] chunk %d transcribe failed", job_id, idx)
+                transcript = ""
+
+            if transcript:
+                best, shortlist = search.search(transcript, shortlist_size=5)
+                per_chunk.append({
+                    "chunk_index": idx,
+                    "transcript": transcript,
+                    "shortlist": shortlist,
+                    "top_pick": best,
+                })
+            else:
+                per_chunk.append({
+                    "chunk_index": idx,
+                    "transcript": "",
+                    "shortlist": [],
+                    "top_pick": None,
+                })
+
+            elapsed = time.perf_counter() - t
+            log.info("identify[%s] chunk %d/%d transcript_len=%d took=%.1fs preview=%r",
+                     job_id, idx + 1, chunks_total, len(transcript), elapsed, transcript[:60])
+            _jobs_update(job_id, progress={"chunks_done": idx + 1, "chunks_total": chunks_total})
+
+        result = _aggregate_chunks(per_chunk)
+        top_song = result["top"]["song"] if result["top"] else None
+        log.info("identify[%s] done top=%r matched=%d/%d",
+                 job_id, top_song, result.get("chunks_matched", 0), chunks_total)
+        _jobs_update(job_id, status="done", result=result)
+    finally:
+        try:
+            os.unlink(audio_path)
+        except OSError:
+            pass
+        for f in glob.glob(os.path.join(work_dir, "*")):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        try:
+            os.rmdir(work_dir)
+        except OSError:
+            pass
+
+
+@app.post("/identify")
+async def identify(file: UploadFile = File(...)):
+    """Start a background identification job; returns job_id immediately."""
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Empty upload")
+
+    job_id = uuid.uuid4().hex[:12]
+    suffix = os.path.splitext(file.filename or "")[1] or ".mp3"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(contents)
+        audio_path = tmp.name
+
+    _jobs_put(job_id, {
+        "status": "queued",
+        "filename": file.filename,
+        "size_kb": len(contents) // 1024,
+        "created_at": time.time(),
+    })
+    log.info("identify[%s] queued filename=%r size=%dKB",
+             job_id, file.filename, len(contents) // 1024)
+
+    threading.Thread(target=_run_identify, args=(job_id, audio_path), daemon=True).start()
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/identify/{job_id}")
+def identify_status(job_id: str):
+    job = _jobs_get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job_id (or already evicted)")
+    return job
 
 
 @app.get("/stats")

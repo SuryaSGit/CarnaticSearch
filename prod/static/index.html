@@ -35,11 +35,29 @@
       </form>
       <div class="upload-row">
         <label for="audio-upload" class="upload-btn">
-          🎵 Upload audio to transcribe
+          🎵 Upload audio to transcribe (first 30s)
           <input id="audio-upload" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac" hidden />
         </label>
         <span id="upload-status"></span>
       </div>
+    </section>
+
+    <section id="identify-section">
+      <h3>Identify a full song from audio</h3>
+      <p class="hint">
+        Upload the whole recording — the backend splits it into chunks,
+        transcribes each independently, and votes across them for the
+        most likely kriti. Slower than the box above but more accurate
+        on long clips.
+      </p>
+      <div class="upload-row">
+        <label for="identify-upload" class="upload-btn">
+          🎼 Upload audio to identify
+          <input id="identify-upload" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac" hidden />
+        </label>
+        <span id="identify-status"></span>
+      </div>
+      <div id="identify-result" class="hidden"></div>
     </section>
 
     <section id="results" class="hidden">

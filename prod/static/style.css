@@ -458,6 +458,67 @@ h2 {
 
 .undo-link:hover { border-bottom-style: solid; }
 
+/* Identify-a-song section */
+#identify-section {
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+#identify-section h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#identify-section .hint {
+  margin-bottom: 14px;
+}
+
+#identify-status {
+  font-style: italic;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+#identify-status.error { color: var(--error); font-style: normal; }
+
+#identify-result {
+  margin-top: 18px;
+  background: var(--card);
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: 0 2px 8px rgba(154, 77, 42, 0.08);
+}
+
+#identify-result .label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+#identify-result .song-name { font-size: 1.4rem; font-weight: 600; margin: 0 0 4px; }
+#identify-result .composer { color: var(--muted); font-size: 0.95rem; margin: 0 0 10px; }
+
+.match-badge {
+  display: inline-block;
+  background: var(--accent-light);
+  color: var(--accent);
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  margin-bottom: 10px;
+}
+
+
 /* Browse by composer / raagam */
 #browse-section {
   margin-top: 48px;
