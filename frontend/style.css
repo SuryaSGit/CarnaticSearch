@@ -506,6 +506,75 @@ h2 {
 #identify-result .song-name { font-size: 1.4rem; font-weight: 600; margin: 0 0 4px; }
 #identify-result .composer { color: var(--muted); font-size: 0.95rem; margin: 0 0 10px; }
 
+#identify-progress {
+  margin-top: 14px;
+}
+
+#identify-progress-bar {
+  background: var(--border);
+  border-radius: 4px;
+  height: 6px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+#identify-progress-fill {
+  background: var(--accent);
+  height: 100%;
+  width: 0%;
+  transition: width 0.3s ease-out;
+}
+
+#identify-chunks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: 0.85rem;
+  font-family: -apple-system, BlinkMacSystemFont, monospace;
+}
+
+#identify-chunks li {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+
+#identify-chunks li:last-child { border-bottom: none; }
+
+#identify-chunks .chunk-time {
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+#identify-chunks .chunk-text {
+  min-width: 0;
+  word-break: break-word;
+}
+
+#identify-chunks .chunk-transcript {
+  color: #444;
+  font-style: italic;
+}
+
+#identify-chunks .chunk-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+#identify-chunks .chunk-top {
+  color: var(--accent);
+  font-weight: 500;
+  font-size: 0.82rem;
+  margin-top: 2px;
+  font-style: normal;
+}
+
 .match-badge {
   display: inline-block;
   background: var(--accent-light);

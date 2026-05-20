@@ -419,10 +419,10 @@ def _ffprobe_duration(path: str) -> float:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", path],
-            check=True, capture_output=True, text=True,
+            check=True, capture_output=True, text=True, timeout=30,
         )
         return float(result.stdout.strip())
-    except (subprocess.CalledProcessError, ValueError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
         return 0.0
 
 
@@ -457,89 +457,16 @@ def _aggregate_chunks(per_chunk: list) -> dict:
 
 
 def _run_identify(job_id: str, audio_path: str):
+    """Background worker wrapper: outer catch-all + temp file cleanup.
+    Without this, an uncaught exception leaves the job stuck at queued."""
     work_dir = audio_path + ".chunks"
     try:
-        os.makedirs(work_dir, exist_ok=True)
-        duration = _ffprobe_duration(audio_path)
-        if duration <= 0:
-            _jobs_update(job_id, status="error", error="Could not read audio duration")
-            log.error("identify[%s] ffprobe failed", job_id)
-            return
-
-        chunk_pattern = os.path.join(work_dir, "chunk_%03d.wav")
-        log.info("identify[%s] splitting %.1fs audio into %ds chunks",
-                 job_id, duration, IDENTIFY_CHUNK_SECONDS)
         try:
-            subprocess.run(
-                ["ffmpeg", "-y", "-loglevel", "error",
-                 "-i", audio_path,
-                 "-f", "segment",
-                 "-segment_time", str(IDENTIFY_CHUNK_SECONDS),
-                 "-ar", "16000", "-ac", "1",
-                 "-c:a", "pcm_s16le",
-                 chunk_pattern],
-                check=True, capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            stderr = (e.stderr or b"").decode(errors="replace")[:300]
-            log.error("identify[%s] ffmpeg segment failed: %s", job_id, stderr)
-            _jobs_update(job_id, status="error", error=f"Audio split failed: {stderr}")
-            return
-
-        chunks = sorted(glob.glob(os.path.join(work_dir, "chunk_*.wav")))
-        chunks_total = len(chunks)
-        _jobs_update(job_id, status="processing",
-                     progress={"chunks_done": 0, "chunks_total": chunks_total})
-        log.info("identify[%s] %d chunks to process", job_id, chunks_total)
-
-        try:
-            model = _get_whisper()
-        except Exception:
-            log.exception("identify[%s] whisper load failed", job_id)
-            _jobs_update(job_id, status="error", error="Whisper model load failed")
-            return
-
-        per_chunk = []
-        for idx, chunk_path in enumerate(chunks):
-            t = time.perf_counter()
-            try:
-                segments, info = model.transcribe(
-                    chunk_path,
-                    beam_size=5,
-                    language=WHISPER_LANGUAGE,
-                    initial_prompt=WHISPER_PROMPT,
-                )
-                transcript = " ".join(s.text.strip() for s in segments).strip()
-            except Exception:
-                log.exception("identify[%s] chunk %d transcribe failed", job_id, idx)
-                transcript = ""
-
-            if transcript:
-                best, shortlist = search.search(transcript, shortlist_size=5)
-                per_chunk.append({
-                    "chunk_index": idx,
-                    "transcript": transcript,
-                    "shortlist": shortlist,
-                    "top_pick": best,
-                })
-            else:
-                per_chunk.append({
-                    "chunk_index": idx,
-                    "transcript": "",
-                    "shortlist": [],
-                    "top_pick": None,
-                })
-
-            elapsed = time.perf_counter() - t
-            log.info("identify[%s] chunk %d/%d transcript_len=%d took=%.1fs preview=%r",
-                     job_id, idx + 1, chunks_total, len(transcript), elapsed, transcript[:60])
-            _jobs_update(job_id, progress={"chunks_done": idx + 1, "chunks_total": chunks_total})
-
-        result = _aggregate_chunks(per_chunk)
-        top_song = result["top"]["song"] if result["top"] else None
-        log.info("identify[%s] done top=%r matched=%d/%d",
-                 job_id, top_song, result.get("chunks_matched", 0), chunks_total)
-        _jobs_update(job_id, status="done", result=result)
+            _do_identify(job_id, audio_path, work_dir)
+        except Exception as e:
+            log.exception("identify[%s] UNCAUGHT in worker", job_id)
+            _jobs_update(job_id, status="error",
+                         error=f"{type(e).__name__}: {e}")
     finally:
         try:
             os.unlink(audio_path)
@@ -554,6 +481,116 @@ def _run_identify(job_id: str, audio_path: str):
             os.rmdir(work_dir)
         except OSError:
             pass
+
+
+def _do_identify(job_id: str, audio_path: str, work_dir: str):
+    os.makedirs(work_dir, exist_ok=True)
+
+    _jobs_update(job_id, status="probing")
+    duration = _ffprobe_duration(audio_path)
+    if duration <= 0:
+        _jobs_update(job_id, status="error", error="Could not read audio duration")
+        log.error("identify[%s] ffprobe failed", job_id)
+        return
+    log.info("identify[%s] audio duration=%.1fs", job_id, duration)
+
+    chunk_pattern = os.path.join(work_dir, "chunk_%03d.wav")
+    _jobs_update(job_id, status="splitting")
+    log.info("identify[%s] splitting %.1fs into %ds chunks", job_id, duration, IDENTIFY_CHUNK_SECONDS)
+    t_split = time.perf_counter()
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-i", audio_path,
+             "-f", "segment",
+             "-segment_time", str(IDENTIFY_CHUNK_SECONDS),
+             "-ar", "16000", "-ac", "1",
+             "-c:a", "pcm_s16le",
+             chunk_pattern],
+            check=True, capture_output=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        log.error("identify[%s] ffmpeg split timed out (>5min)", job_id)
+        _jobs_update(job_id, status="error", error="Audio split timed out (>5min). Try a shorter clip.")
+        return
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or b"").decode(errors="replace")[:300]
+        log.error("identify[%s] ffmpeg split failed: %s", job_id, stderr)
+        _jobs_update(job_id, status="error", error=f"Audio split failed: {stderr}")
+        return
+    log.info("identify[%s] split done in %.1fs", job_id, time.perf_counter() - t_split)
+
+    chunks = sorted(glob.glob(os.path.join(work_dir, "chunk_*.wav")))
+    chunks_total = len(chunks)
+    if chunks_total == 0:
+        _jobs_update(job_id, status="error", error="ffmpeg produced no chunks")
+        log.error("identify[%s] no chunks after split", job_id)
+        return
+
+    _jobs_update(job_id, status="processing",
+                 progress={"chunks_done": 0, "chunks_total": chunks_total},
+                 chunks=[])
+    log.info("identify[%s] %d chunks to process", job_id, chunks_total)
+
+    try:
+        model = _get_whisper()
+    except Exception:
+        log.exception("identify[%s] whisper load failed", job_id)
+        _jobs_update(job_id, status="error", error="Whisper model load failed (see logs)")
+        return
+
+    per_chunk = []
+    chunks_live = []
+    for idx, chunk_path in enumerate(chunks):
+        t = time.perf_counter()
+        try:
+            segments, info = model.transcribe(
+                chunk_path,
+                beam_size=5,
+                language=WHISPER_LANGUAGE,
+                initial_prompt=WHISPER_PROMPT,
+            )
+            transcript = " ".join(s.text.strip() for s in segments).strip()
+        except Exception:
+            log.exception("identify[%s] chunk %d transcribe failed", job_id, idx)
+            transcript = ""
+
+        top_pick_name = None
+        if transcript:
+            best, shortlist = search.search(transcript, shortlist_size=5)
+            per_chunk.append({
+                "chunk_index": idx, "transcript": transcript,
+                "shortlist": shortlist, "top_pick": best,
+            })
+            top_pick_name = best["song"] if best else None
+        else:
+            per_chunk.append({
+                "chunk_index": idx, "transcript": "",
+                "shortlist": [], "top_pick": None,
+            })
+
+        elapsed = time.perf_counter() - t
+        log.info("identify[%s] chunk %d/%d transcript_len=%d took=%.1fs top=%r preview=%r",
+                 job_id, idx + 1, chunks_total, len(transcript), elapsed, top_pick_name, transcript[:60])
+
+        chunks_live.append({
+            "i": idx,
+            "start_s": idx * IDENTIFY_CHUNK_SECONDS,
+            "transcript": transcript,
+            "top": top_pick_name,
+            "took_s": round(elapsed, 1),
+        })
+        _jobs_update(
+            job_id,
+            progress={"chunks_done": idx + 1, "chunks_total": chunks_total},
+            chunks=list(chunks_live),
+        )
+
+    result = _aggregate_chunks(per_chunk)
+    top_song = result["top"]["song"] if result["top"] else None
+    log.info("identify[%s] done top=%r matched=%d/%d",
+             job_id, top_song, result.get("chunks_matched", 0), chunks_total)
+    _jobs_update(job_id, status="done", result=result)
 
 
 @app.post("/identify")

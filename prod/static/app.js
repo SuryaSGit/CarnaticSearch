@@ -8,9 +8,12 @@ const els = {
   searchBtn:      $("#search-btn"),
   audioUpload:    $("#audio-upload"),
   uploadStatus:   $("#upload-status"),
-  identifyUpload: $("#identify-upload"),
-  identifyStatus: $("#identify-status"),
-  identifyResult: $("#identify-result"),
+  identifyUpload:    $("#identify-upload"),
+  identifyStatus:    $("#identify-status"),
+  identifyResult:    $("#identify-result"),
+  identifyProgress:  $("#identify-progress"),
+  identifyProgFill:  $("#identify-progress-fill"),
+  identifyChunks:    $("#identify-chunks"),
   results:        $("#results"),
   topPick:        $("#top-pick"),
   shortlist:      $("#shortlist"),
@@ -536,6 +539,9 @@ els.identifyUpload.addEventListener("change", async () => {
   els.identifyStatus.textContent = `Uploading ${file.name} …`;
   els.identifyResult.classList.add("hidden");
   els.identifyResult.innerHTML = "";
+  els.identifyProgress.classList.add("hidden");
+  els.identifyProgFill.style.width = "0%";
+  els.identifyChunks.innerHTML = "";
 
   try {
     const fd = new FormData();
@@ -557,9 +563,8 @@ els.identifyUpload.addEventListener("change", async () => {
 async function pollIdentify(jobId) {
   const startedAt = Date.now();
   const POLL_MS = 2000;
-  // Keep polling forever until status is done or error. Server may take
-  // minutes for long audio; the user sees per-chunk progress in the
-  // status line.
+  let lastChunkCount = 0;
+
   while (true) {
     await sleep(POLL_MS);
     try {
@@ -570,14 +575,34 @@ async function pollIdentify(jobId) {
 
       if (job.status === "queued") {
         els.identifyStatus.textContent = `Queued… (${elapsed}s)`;
-      } else if (job.status === "processing") {
+      } else if (job.status === "probing") {
+        els.identifyStatus.textContent = `Reading audio metadata… (${elapsed}s)`;
+      } else if (job.status === "splitting") {
+        els.identifyStatus.textContent = `Splitting audio into chunks… (${elapsed}s)`;
+      } else if (job.status === "processing" || job.status === "done") {
         const p = job.progress || {};
-        els.identifyStatus.textContent =
-          `Transcribing chunks ${p.chunks_done ?? 0}/${p.chunks_total ?? "?"} — ${elapsed}s elapsed`;
-      } else if (job.status === "done") {
-        els.identifyStatus.textContent = `Identified in ${elapsed}s.`;
-        renderIdentifyResult(job.result);
-        return;
+        const done = p.chunks_done ?? 0;
+        const total = p.chunks_total ?? 0;
+        const verb = job.status === "done" ? `Identified in ${elapsed}s.` :
+          `Transcribing ${done}/${total} — ${elapsed}s elapsed`;
+        els.identifyStatus.textContent = verb;
+
+        if (total > 0) {
+          els.identifyProgress.classList.remove("hidden");
+          els.identifyProgFill.style.width = `${Math.round((done / total) * 100)}%`;
+        }
+
+        // Append any new chunks to the live feed
+        const chunks = job.chunks || [];
+        for (let i = lastChunkCount; i < chunks.length; i++) {
+          appendChunkRow(chunks[i]);
+        }
+        lastChunkCount = chunks.length;
+
+        if (job.status === "done") {
+          renderIdentifyResult(job.result);
+          return;
+        }
       } else if (job.status === "error") {
         els.identifyStatus.textContent = `Failed: ${job.error || "(unknown error)"}`;
         els.identifyStatus.classList.add("error");
@@ -589,6 +614,25 @@ async function pollIdentify(jobId) {
       return;
     }
   }
+}
+
+
+function appendChunkRow(ch) {
+  const li = document.createElement("li");
+  const mmss = `${Math.floor(ch.start_s / 60)}:${String(ch.start_s % 60).padStart(2, "0")}`;
+  const transcript = ch.transcript
+    ? `<span class="chunk-transcript">${escapeHtml(ch.transcript)}</span>`
+    : `<span class="chunk-empty">(no speech detected)</span>`;
+  const topLine = ch.top
+    ? `<div class="chunk-top">→ ${escapeHtml(ch.top)}</div>`
+    : "";
+  li.innerHTML = `
+    <div class="chunk-time">${mmss} · ${ch.took_s}s</div>
+    <div class="chunk-text">${transcript}${topLine}</div>
+  `;
+  els.identifyChunks.appendChild(li);
+  // Auto-scroll the chunks panel to follow new arrivals
+  els.identifyChunks.scrollTop = els.identifyChunks.scrollHeight;
 }
 
 
