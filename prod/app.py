@@ -414,16 +414,19 @@ def _jobs_update(job_id: str, **kwargs):
             _jobs[job_id].update(kwargs)
 
 
-def _ffprobe_duration(path: str) -> float:
+def _audio_duration(path: str) -> float:
+    """Audio duration via PyAV (bundled with faster-whisper). Avoids
+    shelling out to ffprobe which isn't always present in the container
+    even when ffmpeg is. Returns 0.0 on failure — callers treat as
+    informational only."""
     try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            check=True, capture_output=True, text=True, timeout=30,
-        )
-        return float(result.stdout.strip())
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
-        return 0.0
+        import av  # bundled by faster-whisper
+        with av.open(path) as container:
+            if container.duration:
+                return container.duration / 1_000_000
+    except Exception as e:
+        log.warning("audio duration probe failed: %s", e)
+    return 0.0
 
 
 def _aggregate_chunks(per_chunk: list) -> dict:
@@ -487,12 +490,10 @@ def _do_identify(job_id: str, audio_path: str, work_dir: str):
     os.makedirs(work_dir, exist_ok=True)
 
     _jobs_update(job_id, status="probing")
-    duration = _ffprobe_duration(audio_path)
-    if duration <= 0:
-        _jobs_update(job_id, status="error", error="Could not read audio duration")
-        log.error("identify[%s] ffprobe failed", job_id)
-        return
-    log.info("identify[%s] audio duration=%.1fs", job_id, duration)
+    duration = _audio_duration(audio_path)
+    # Informational only. If it fails we still try to split — the
+    # chunks_total > 0 check catches genuinely bad audio.
+    log.info("identify[%s] audio duration=%.1fs (0.0 = unknown)", job_id, duration)
 
     chunk_pattern = os.path.join(work_dir, "chunk_%03d.wav")
     _jobs_update(job_id, status="splitting")
