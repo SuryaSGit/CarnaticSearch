@@ -324,29 +324,21 @@ async def transcribe(file: UploadFile = File(...)):
         tmp_in.write(contents)
         tmp_in_path = tmp_in.name
 
-    tmp_out_path = tmp_in_path + ".clipped.wav"
     try:
-        t_clip = time.perf_counter()
+        # Use faster-whisper's PyAV-backed decoder — no system ffmpeg needed.
+        t_decode = time.perf_counter()
         try:
-            subprocess.run(
-                [
-                    "ffmpeg", "-y", "-loglevel", "error",
-                    "-i", tmp_in_path,
-                    "-t", str(MAX_AUDIO_SECONDS),
-                    "-ar", "16000", "-ac", "1",
-                    "-c:a", "pcm_s16le",
-                    tmp_out_path,
-                ],
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            stderr = (e.stderr or b"").decode(errors="replace")[:300]
-            log.error("transcribe ffmpeg failed: rc=%d stderr=%s", e.returncode, stderr)
-            raise HTTPException(status_code=400, detail=f"Audio decode failed: {stderr}")
-        log.info("transcribe ffmpeg clipped to %ds in %.2fs (out=%dKB)",
-                 MAX_AUDIO_SECONDS, time.perf_counter() - t_clip,
-                 os.path.getsize(tmp_out_path) // 1024)
+            from faster_whisper.audio import decode_audio
+            audio = decode_audio(tmp_in_path, sampling_rate=16000)
+        except Exception as e:
+            log.exception("transcribe decode_audio failed")
+            raise HTTPException(status_code=400, detail=f"Audio decode failed: {e}")
+
+        max_samples = MAX_AUDIO_SECONDS * 16000
+        clipped = audio[:max_samples]
+        log.info("transcribe decoded %.1fs in %.2fs; truncated to %.1fs",
+                 len(audio) / 16000.0, time.perf_counter() - t_decode,
+                 len(clipped) / 16000.0)
 
         try:
             model = _get_whisper()
@@ -357,7 +349,7 @@ async def transcribe(file: UploadFile = File(...)):
         t_transcribe = time.perf_counter()
         try:
             segments, info = model.transcribe(
-                tmp_out_path,
+                clipped,
                 beam_size=5,
                 language=WHISPER_LANGUAGE,
                 initial_prompt=WHISPER_PROMPT,
@@ -379,11 +371,10 @@ async def transcribe(file: UploadFile = File(...)):
             "clipped_to_seconds": MAX_AUDIO_SECONDS,
         }
     finally:
-        for p in (tmp_in_path, tmp_out_path):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
+        try:
+            os.unlink(tmp_in_path)
+        except OSError:
+            pass
 
 
 # -----------------------
@@ -490,42 +481,27 @@ def _do_identify(job_id: str, audio_path: str, work_dir: str):
     os.makedirs(work_dir, exist_ok=True)
 
     _jobs_update(job_id, status="probing")
-    duration = _audio_duration(audio_path)
-    # Informational only. If it fails we still try to split — the
-    # chunks_total > 0 check catches genuinely bad audio.
-    log.info("identify[%s] audio duration=%.1fs (0.0 = unknown)", job_id, duration)
-
-    chunk_pattern = os.path.join(work_dir, "chunk_%03d.wav")
-    _jobs_update(job_id, status="splitting")
-    log.info("identify[%s] splitting %.1fs into %ds chunks", job_id, duration, IDENTIFY_CHUNK_SECONDS)
-    t_split = time.perf_counter()
+    log.info("identify[%s] decoding audio", job_id)
+    t_decode = time.perf_counter()
     try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error",
-             "-i", audio_path,
-             "-f", "segment",
-             "-segment_time", str(IDENTIFY_CHUNK_SECONDS),
-             "-ar", "16000", "-ac", "1",
-             "-c:a", "pcm_s16le",
-             chunk_pattern],
-            check=True, capture_output=True, timeout=300,
-        )
-    except subprocess.TimeoutExpired:
-        log.error("identify[%s] ffmpeg split timed out (>5min)", job_id)
-        _jobs_update(job_id, status="error", error="Audio split timed out (>5min). Try a shorter clip.")
+        from faster_whisper.audio import decode_audio
+        audio = decode_audio(audio_path, sampling_rate=16000)
+    except Exception as e:
+        log.exception("identify[%s] decode_audio failed", job_id)
+        _jobs_update(job_id, status="error", error=f"Could not decode audio: {e}")
         return
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or b"").decode(errors="replace")[:300]
-        log.error("identify[%s] ffmpeg split failed: %s", job_id, stderr)
-        _jobs_update(job_id, status="error", error=f"Audio split failed: {stderr}")
-        return
-    log.info("identify[%s] split done in %.1fs", job_id, time.perf_counter() - t_split)
+    duration = len(audio) / 16000.0
+    log.info("identify[%s] decoded %.1fs of audio in %.1fs",
+             job_id, duration, time.perf_counter() - t_decode)
 
-    chunks = sorted(glob.glob(os.path.join(work_dir, "chunk_*.wav")))
+    chunk_samples = IDENTIFY_CHUNK_SECONDS * 16000
+    chunks = [audio[i:i + chunk_samples]
+              for i in range(0, len(audio), chunk_samples)
+              if len(audio[i:i + chunk_samples]) >= 16000]
     chunks_total = len(chunks)
     if chunks_total == 0:
-        _jobs_update(job_id, status="error", error="ffmpeg produced no chunks")
-        log.error("identify[%s] no chunks after split", job_id)
+        _jobs_update(job_id, status="error", error="Audio too short to chunk")
+        log.error("identify[%s] no chunks (audio too short)", job_id)
         return
 
     _jobs_update(job_id, status="processing",
@@ -542,11 +518,11 @@ def _do_identify(job_id: str, audio_path: str, work_dir: str):
 
     per_chunk = []
     chunks_live = []
-    for idx, chunk_path in enumerate(chunks):
+    for idx, chunk_audio in enumerate(chunks):
         t = time.perf_counter()
         try:
             segments, info = model.transcribe(
-                chunk_path,
+                chunk_audio,
                 beam_size=5,
                 language=WHISPER_LANGUAGE,
                 initial_prompt=WHISPER_PROMPT,

@@ -361,32 +361,24 @@ async def transcribe(file: UploadFile = File(...)):
         tmp_in.write(contents)
         tmp_in_path = tmp_in.name
 
-    # Truncate via ffmpeg to bound transcription time. Output is 16kHz mono
-    # WAV (Whisper's native format) so model.transcribe spends zero time on
-    # resampling/decoding either.
-    tmp_out_path = tmp_in_path + ".clipped.wav"
     try:
-        t_clip = time.perf_counter()
+        # Decode in-process via faster-whisper's PyAV-backed loader — no
+        # system ffmpeg needed, no temp-file roundtrip for the resampled wav.
+        t_decode = time.perf_counter()
         try:
-            subprocess.run(
-                [
-                    "ffmpeg", "-y", "-loglevel", "error",
-                    "-i", tmp_in_path,
-                    "-t", str(MAX_AUDIO_SECONDS),
-                    "-ar", "16000", "-ac", "1",
-                    "-c:a", "pcm_s16le",
-                    tmp_out_path,
-                ],
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            stderr = (e.stderr or b"").decode(errors="replace")[:300]
-            log.error("transcribe ffmpeg failed: rc=%d stderr=%s", e.returncode, stderr)
-            raise HTTPException(status_code=400, detail=f"Audio decode failed: {stderr}")
-        log.info("transcribe ffmpeg clipped to %ds in %.2fs (out=%dKB)",
-                 MAX_AUDIO_SECONDS, time.perf_counter() - t_clip,
-                 os.path.getsize(tmp_out_path) // 1024)
+            from faster_whisper.audio import decode_audio
+            audio = decode_audio(tmp_in_path, sampling_rate=16000)
+        except Exception as e:
+            log.exception("transcribe decode_audio failed")
+            raise HTTPException(status_code=400, detail=f"Audio decode failed: {e}")
+
+        # Truncate by sample count to bound transcription time within HF
+        # Space's gateway window.
+        max_samples = MAX_AUDIO_SECONDS * 16000
+        clipped = audio[:max_samples]
+        log.info("transcribe decoded %.1fs in %.2fs; truncated to %.1fs",
+                 len(audio) / 16000.0, time.perf_counter() - t_decode,
+                 len(clipped) / 16000.0)
 
         try:
             model = _get_whisper()
@@ -397,7 +389,7 @@ async def transcribe(file: UploadFile = File(...)):
         t_transcribe = time.perf_counter()
         try:
             segments, info = model.transcribe(
-                tmp_out_path,
+                clipped,
                 beam_size=5,
                 language=WHISPER_LANGUAGE,
                 initial_prompt=WHISPER_PROMPT,
@@ -419,11 +411,10 @@ async def transcribe(file: UploadFile = File(...)):
             "clipped_to_seconds": MAX_AUDIO_SECONDS,
         }
     finally:
-        for p in (tmp_in_path, tmp_out_path):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
+        try:
+            os.unlink(tmp_in_path)
+        except OSError:
+            pass
 
 
 # -----------------------
@@ -536,53 +527,39 @@ def _run_identify(job_id: str, audio_path: str):
 
 
 def _do_identify(job_id: str, audio_path: str, work_dir: str):
+    # work_dir kept for the wrapper's cleanup contract but unused since we
+    # no longer write per-chunk wav files — chunks are numpy slices in memory.
     os.makedirs(work_dir, exist_ok=True)
 
     _jobs_update(job_id, status="probing")
-    duration = _audio_duration(audio_path)
-    # duration is informational only — if it fails we still try to split.
-    # The chunks_total > 0 check after ffmpeg-split catches genuinely bad audio.
-    log.info("identify[%s] audio duration=%.1fs (0.0 = unknown)", job_id, duration)
-
-    chunk_pattern = os.path.join(work_dir, "chunk_%03d.wav")
-    _jobs_update(job_id, status="splitting")
-    log.info("identify[%s] splitting %.1fs into %ds chunks", job_id, duration, IDENTIFY_CHUNK_SECONDS)
-    t_split = time.perf_counter()
+    log.info("identify[%s] decoding audio", job_id)
+    t_decode = time.perf_counter()
     try:
-        # Cap split time at 5min — protects against pathological inputs that
-        # could hang ffmpeg indefinitely (would otherwise leave job 'queued'
-        # / 'splitting' until container restart).
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error",
-             "-i", audio_path,
-             "-f", "segment",
-             "-segment_time", str(IDENTIFY_CHUNK_SECONDS),
-             "-ar", "16000", "-ac", "1",
-             "-c:a", "pcm_s16le",
-             chunk_pattern],
-            check=True, capture_output=True, timeout=300,
-        )
-    except subprocess.TimeoutExpired:
-        log.error("identify[%s] ffmpeg split timed out (>5min)", job_id)
-        _jobs_update(job_id, status="error", error="Audio split timed out (>5min). Try a shorter clip.")
+        # decode_audio is bundled with faster-whisper and uses PyAV's libav
+        # internally — no system ffmpeg dependency.
+        from faster_whisper.audio import decode_audio
+        audio = decode_audio(audio_path, sampling_rate=16000)
+    except Exception as e:
+        log.exception("identify[%s] decode_audio failed", job_id)
+        _jobs_update(job_id, status="error", error=f"Could not decode audio: {e}")
         return
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or b"").decode(errors="replace")[:300]
-        log.error("identify[%s] ffmpeg split failed: %s", job_id, stderr)
-        _jobs_update(job_id, status="error", error=f"Audio split failed: {stderr}")
-        return
-    log.info("identify[%s] split done in %.1fs", job_id, time.perf_counter() - t_split)
+    duration = len(audio) / 16000.0
+    log.info("identify[%s] decoded %.1fs of audio in %.1fs",
+             job_id, duration, time.perf_counter() - t_decode)
 
-    chunks = sorted(glob.glob(os.path.join(work_dir, "chunk_*.wav")))
+    chunk_samples = IDENTIFY_CHUNK_SECONDS * 16000
+    chunks = [audio[i:i + chunk_samples]
+              for i in range(0, len(audio), chunk_samples)
+              if len(audio[i:i + chunk_samples]) >= 16000]  # skip <1s tails
     chunks_total = len(chunks)
     if chunks_total == 0:
-        _jobs_update(job_id, status="error", error="ffmpeg produced no chunks")
-        log.error("identify[%s] no chunks after split", job_id)
+        _jobs_update(job_id, status="error", error="Audio too short to chunk")
+        log.error("identify[%s] no chunks (audio too short)", job_id)
         return
 
     _jobs_update(job_id, status="processing",
                  progress={"chunks_done": 0, "chunks_total": chunks_total},
-                 chunks=[])  # live per-chunk feed
+                 chunks=[])
     log.info("identify[%s] %d chunks to process", job_id, chunks_total)
 
     try:
@@ -593,12 +570,12 @@ def _do_identify(job_id: str, audio_path: str, work_dir: str):
         return
 
     per_chunk = []
-    chunks_live = []  # mirror, simplified, for the job state
-    for idx, chunk_path in enumerate(chunks):
+    chunks_live = []
+    for idx, chunk_audio in enumerate(chunks):
         t = time.perf_counter()
         try:
             segments, info = model.transcribe(
-                chunk_path,
+                chunk_audio,  # numpy float32 array, native whisper input
                 beam_size=5,
                 language=WHISPER_LANGUAGE,
                 initial_prompt=WHISPER_PROMPT,
@@ -626,7 +603,6 @@ def _do_identify(job_id: str, audio_path: str, work_dir: str):
         log.info("identify[%s] chunk %d/%d transcript_len=%d took=%.1fs top=%r preview=%r",
                  job_id, idx + 1, chunks_total, len(transcript), elapsed, top_pick_name, transcript[:60])
 
-        # Append to live feed and push to job state so the frontend can render it.
         chunks_live.append({
             "i": idx,
             "start_s": idx * IDENTIFY_CHUNK_SECONDS,
